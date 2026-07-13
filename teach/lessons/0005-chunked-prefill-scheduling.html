@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 5 — Prefill 스케줄링과 Chunked Prefill</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .tl { width:100%; border-collapse:collapse; font-size:0.86rem; margin:1.1rem 0; }
+  .tl th, .tl td { padding:0.4rem 0.5rem; border-bottom:1px solid var(--rule); text-align:left; vertical-align:top; }
+  .tl th { font-family:system-ui,sans-serif; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); }
+  .tl .it { font-family:"SF Mono",Menlo,monospace; color:var(--muted); width:44px; }
+  .go { color:var(--good); font-weight:700; }
+  .stop { color:var(--bad); font-weight:700; }
+  .pf { background:var(--accent-soft); border-radius:4px; padding:0.05rem 0.35rem; font-family:"SF Mono",Menlo,monospace; font-size:0.8rem; }
+  .res { font-family:"SF Mono",Menlo,monospace; font-size:0.8rem; background:var(--code-bg); border:1px solid var(--rule); border-radius:8px; padding:0.9rem 1.1rem; margin:1rem 0; line-height:1.5; white-space:pre; overflow-x:auto; }
+  .map { width:100%; border-collapse:collapse; font-size:0.92rem; margin:1rem 0; }
+  .map td, .map th { padding:0.4rem 0.6rem; border-bottom:1px solid var(--rule); text-align:left; }
+</style>
+</head>
+<body>
+
+<p class="kicker">Lesson 05 · Phase 1 — The Workload</p>
+<h1>Prefill 스케줄링과 Chunked Prefill</h1>
+<p class="subtitle">한 사용자의 긴 프롬프트가 다른 사용자의 답변을 멈추게 하는 문제(prefill stalling)와, 그걸 OS 스케줄링처럼 푸는 방법.</p>
+
+<div class="callout key">
+  <span class="label">이번 레슨의 단 하나의 승리</span>
+  두 사용자의 요청을 <strong>iteration 단위로 따라가며</strong>, prefill stalling이 왜 생기고 <strong>chunked prefill</strong>이
+  그걸 어떻게 없애는지 이해한다. 그리고 이 전부가 <strong>OS 시분할/SMT</strong>와 같은 구조임을 본다.
+</div>
+
+<h2>배경: 프리필과 디코드는 성격이 정반대다</h2>
+<p>
+<a href="0002-decode-loop-and-kv-cache.html">Lesson 2</a>에서 봤듯, 추론은 두 단계다. 그런데 둘의 하드웨어 프로필이 정반대다:
+</p>
+<table class="map">
+  <tr><th></th><th>성격</th><th>노는 자원</th></tr>
+  <tr><td><strong>프리필</strong> (프롬프트 통째로)</td><td>compute-bound</td><td>메모리 대역폭이 남음</td></tr>
+  <tr><td><strong>디코드</strong> (토큰 1개씩)</td><td>memory-bound</td><td>계산 유닛이 남음</td></tr>
+</table>
+<p>iteration은 <strong>배치의 모든 사용자가 함께 한 스텝 전진하는 단위</strong>다. 한 스텝이 끝나야 다음 토큰들이 시작된다 — 이 사실이 문제의 씨앗이다.</p>
+
+<h2>문제를 보자 — 유저 A, B 두 명</h2>
+<p class="small">규칙: 프리필 예산 = 512토큰/스텝, 디코드 = 사용자당 1토큰/스텝. <strong>A</strong> 프롬프트 1,500토큰(t=0 도착), <strong>B</strong> 프롬프트 1,000토큰(A가 답하는 중 도착).</p>
+
+<h3>❌ Chunked prefill 없이 (통짜 프리필)</h3>
+<table class="tl">
+  <tr><th class="it">iter</th><th>하는 일</th><th>A</th><th>B</th></tr>
+  <tr><td class="it">0</td><td><span class="pf">A 프리필 1,500 통째로</span> (무거움)</td><td>프리필</td><td>—</td></tr>
+  <tr><td class="it">1</td><td>A 디코드 → A토큰1</td><td class="go">🟢 술술</td><td>—</td></tr>
+  <tr><td class="it">2</td><td>A 디코드 → A토큰2</td><td class="go">🟢 술술</td><td>← B 도착</td></tr>
+  <tr><td class="it">3</td><td><span class="pf">B 프리필 1,000 통째로</span> (매우 무거움)</td><td class="stop">🔴 멈춤!</td><td>프리필</td></tr>
+  <tr><td class="it">4</td><td>A 디코드 + B 디코드</td><td class="go">🟢 재개</td><td class="go">🟢</td></tr>
+</table>
+<p>iter 3에서 B의 프리필 1,000토큰이 그 스텝의 계산을 통째로 잡아먹어 <strong>스텝이 길어지고, A는 그동안 다음 토큰을 못 받는다</strong>. A 화면에서 글자가 술술 나오다 <strong>뚝 끊긴다</strong>. 이것이 <strong>prefill stalling</strong>.</p>
+
+<h3>✅ Chunked prefill 적용 (예산 512/스텝)</h3>
+<table class="tl">
+  <tr><th class="it">iter</th><th>하는 일 (프리필 조각 + 디코드 섞기)</th><th>A</th><th>B</th></tr>
+  <tr><td class="it">1</td><td><span class="pf">A프리필[512]</span></td><td>프리필 1/3</td><td>—</td></tr>
+  <tr><td class="it">2</td><td><span class="pf">A프리필[512]</span></td><td>프리필 2/3</td><td>—</td></tr>
+  <tr><td class="it">3</td><td><span class="pf">A프리필[476]</span> → A 프리필 완료</td><td>첫 토큰 임박</td><td>—</td></tr>
+  <tr><td class="it">4</td><td>A디코드 → A토큰1</td><td class="go">🟢</td><td>—</td></tr>
+  <tr><td class="it">5</td><td>A디코드 → A토큰2</td><td class="go">🟢</td><td>← B 도착</td></tr>
+  <tr><td class="it">6</td><td><span class="pf">B프리필[512]</span> + A디코드 → A토큰3</td><td class="go">🟢 안 멈춤!</td><td>프리필 1/2</td></tr>
+  <tr><td class="it">7</td><td><span class="pf">B프리필[488]</span> + A디코드 → A토큰4 → B 완료</td><td class="go">🟢</td><td>프리필 완료</td></tr>
+  <tr><td class="it">8</td><td>A디코드 + B디코드 → A토큰5, B토큰1</td><td class="go">🟢</td><td class="go">🟢</td></tr>
+</table>
+<p>B의 프리필이 <strong>512토큰씩 조각나</strong> 들어오니 한 스텝의 계산량에 상한이 걸린다. 그래서 <strong>A는 매 스텝 토큰을 하나씩 계속 받는다</strong> — 멈춤이 없다.</p>
+
+<h2>왜 A가 안 멈추나 — 자원 섞기 (진짜 이유)</h2>
+<p>iter 6을 자원 관점에서 뜯으면, 두 작업이 <em>서로 다른 자원</em>을 쓴다:</p>
+<div class="res">iter 6:   B프리필 512토큰   ┃   A디코드 1토큰
+          ─────────────────┃─────────────────
+계산 유닛 :  거의 다 씀 ███████ ┃ ░ 조금
+메모리대역:  조금 ░           ┃ ███████ 거의 다 씀</div>
+<p>
+프리필은 계산 유닛을 쓰지만 대역폭을 남기고, 디코드는 대역폭을 쓰지만 계산 유닛을 남긴다.
+둘을 한 스텝에 섞으면 <strong>서로의 놀던 자원을 메꿔</strong> GPU가 양쪽으로 꽉 찬다.
+B를 프리필하는 “김에” A 디코드가 거의 공짜로 얹혀 간다.
+(<a href="0001-why-inference-is-memory-bound.html">Lesson 1</a>의 “배치 1은 계산 유닛이 논다”를 정반대에서 푸는 것.)
+</p>
+
+<div class="callout key">
+  <span class="label">핵심: 쪼개는 대상은 '메모리'가 아니라 '계산 시간'</span>
+  A가 멈춘 이유는 메모리가 부족해서가 <em>아니라</em>, <strong>그 한 스텝이 너무 길어서</strong>였다.
+  chunked prefill은 <strong>한 스텝에 넣는 프리필 계산량(스텝 길이)</strong>에 상한을 둔다.
+  (B의 KV 캐시 메모리를 조각내 할당하는 건 별개 축 — 그건 <a href="../reference/glossary.html">PagedAttention</a>의 일이다.)
+</div>
+
+<h2>이건 정확히 OS 스케줄링이다</h2>
+<table class="map">
+  <tr><th>서빙 엔진</th><th>OS 세계</th></tr>
+  <tr><td>GPU 하나</td><td>CPU 코어 하나</td></tr>
+  <tr><td>iteration 한 스텝</td><td>타임 슬라이스 (quantum)</td></tr>
+  <tr><td>요청 A, B</td><td>프로세스</td></tr>
+  <tr><td>chunk 예산 (512)</td><td>퀀텀 길이</td></tr>
+  <tr><td>KV 캐시</td><td>프로세스별 상태(context)</td></tr>
+</table>
+<ul>
+  <li><strong>연속 배칭 = 라운드 로빈</strong>: 요청이 끝나면 슬롯에서 빠지고 대기열의 새 요청이 들어온다.</li>
+  <li><strong>prefill stalling = head-of-line blocking</strong>: 한 작업이 코어를 안 놓아 뒤가 밀린다.</li>
+  <li><strong>통짜 프리필 = yield 안 하는 협조적(cooperative) 태스크</strong> → <strong>chunked prefill = 선점형(preemptive) 타임슬라이싱</strong>.</li>
+</ul>
+
+<div class="callout">
+  <span class="label">더 정확한 비유: SMT(하이퍼스레딩)</span>
+  프리필(compute-bound)과 디코드(memory-bound)를 한 스텝에 섞어 서로의 놀던 실행 유닛을 채우는 건,
+  성격 다른 두 스레드를 한 코어에 얹는 <strong>SMT</strong>와 같다. 현대 LLM 서빙 엔진 = <strong>라운드 로빈(공정성) + SMT(자원 충전)를
+  iteration 단위로 합친 스케줄러</strong>. 단, 진짜 선점은 커널 도중이 아니라 <strong>iteration 경계에서만</strong> 일어난다(그래서 chunk 크기가 퀀텀).
+</div>
+
+<h2>트레이드오프 (튜닝 knob)</h2>
+<ul>
+  <li>새 요청(B)의 <strong>TTFT는 살짝 늘어남</strong> — 프리필을 여러 스텝에 나눴으니.</li>
+  <li>대신 진행 중인 요청(A)의 <strong>지연은 안정</strong> + 전체 처리량 향상.</li>
+  <li><strong>chunk 크기</strong>가 knob: 작게 → 디코드 더 안정, TTFT↑ / 크게 → 시작 빠름, 끊길 위험↑.</li>
+</ul>
+
+<div class="quiz" data-answer="2">
+  <div class="q">Chunked prefill이 A의 디코드를 멈추지 않게 하는 원리는?</div>
+  <button class="opt">B의 KV 캐시 메모리를 페이지 단위로 나눠 할당해서</button>
+  <button class="opt">B의 프리필을 아예 다른 GPU로 보내버려서</button>
+  <button class="opt">한 스텝에 넣는 프리필 계산량에 상한을 둬 스텝이 길어지지 않아서</button>
+  <button class="opt">디코드를 프리필보다 항상 먼저 처리하도록 우선순위를 줘서</button>
+  <div class="feedback"
+       data-correct="정확하다. 멈춤은 '스텝이 너무 길어서'였고, chunk는 스텝당 계산량(=스텝 길이)에 상한을 둔다. 메모리 축이 아니다."
+       data-wrong="핵심은 '계산 시간'이다. A가 멈춘 건 메모리 부족이 아니라 한 스텝이 너무 길어져서 — chunk가 그 스텝 길이를 제한한다."></div>
+</div>
+
+<div class="callout">
+  <span class="label">스스로 확인 (retrieval practice)</span>
+  종이를 덮고: ⑴ prefill stalling은 어떤 자원의 문제인가(메모리? 계산 시간?)? ⑵ 프리필과 디코드를 섞으면 이득인 이유는?
+  ⑶ chunk 크기를 줄이면 무엇이 좋아지고 무엇이 나빠지나? &nbsp;+ <em>복습:</em> 연속 배칭이 정적 배칭 대비 없애는 낭비는?(L4)
+</div>
+
+<h2>가장 먼저 읽을 자료 (primary source)</h2>
+<p>
+Agrawal et al., <a href="https://arxiv.org/abs/2308.16369"><em>SARATHI: Efficient LLM Inference by Piggybacking Decodes with Chunked Prefills</em></a> —
+chunked prefill의 원 논문. 실무 관점은
+<a href="https://docs.vllm.ai/en/latest/">vLLM 문서의 chunked prefill 항목</a> 참고.
+</p>
+
+<div class="ask">
+  🧑‍🏫 <strong>막히면 바로 물어보세요.</strong> “10명이 몰리면 스케줄러가 우선순위를 어떻게 정해?”,
+  “prefill/decode를 아예 다른 GPU로 나누는 disaggregated serving은?”, “chunk 크기는 실무에서 어떻게 정해?”
+</div>
+
+<hr>
+<p class="refs"><strong>References</strong></p>
+<ol class="refs">
+  <li>[1] Agrawal et al., <a href="https://arxiv.org/abs/2308.16369">SARATHI: Piggybacking Decodes with Chunked Prefills</a>, 2023.</li>
+  <li>[2] Anyscale, <a href="https://www.anyscale.com/blog/continuous-batching-llm-inference">Continuous batching for LLM inference</a>.</li>
+</ol>
+
+<div class="lesson-nav">
+  <span><a href="0004-batching-throughput-vs-memory.html">← Lesson 4 (배칭)</a></span>
+  <span><a href="../index.html">🏠 Hub</a> · <a href="../reference/glossary.html">Glossary</a> · Phase 1 완료 → Phase 2: 양자화 (예정)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0013 — Pod 네트워크 vs Service 네트워크: 진짜와 가상</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0013 <span class="tag">심화 · 질문에서 태어남</span></p>
+<h1>Pod 네트워크 vs Service 네트워크: 진짜와 가상</h1>
+<p class="subtitle">0012 의 FAQ 한 줄 — "CNI 는 Pod 네트워크, kube-proxy 는 Service 네트워크" — 를 제대로 파본다. 학습자의 질문에서 태어난 레슨.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> ClusterIP 가 <b>어떤 인터페이스에도 붙어 있지 않은 가상 주소</b>임을 이해하고,
+"ping 은 안 되는데 curl 은 되는" 비대칭을 내 클러스터에서 직접 관찰한다. 0003 의
+"ClusterIP 는 불변"이 <em>왜</em> 가능한지가 여기서 풀린다.
+</div>
+
+<h2>0. 한눈에 — 택배로 비유하면</h2>
+
+<div class="aha">
+<span class="label">30초 요약 (이것만 외워도 됨)</span>
+<p><b>Pod 네트워크</b> = <u>진짜 컴퓨터들</u>의 네트워크. IP 가 실재하지만 Pod 가 죽으면 그 IP 도 사라진다 → <b>자주 바뀜</b>.</p>
+<p><b>Service 네트워크</b> = 그 컴퓨터들 앞에 세운 <u>절대 안 바뀌는 가짜 간판 하나</u>. 간판 뒤엔 실물이 없고, 간판으로 온 요청은 <b>지금 살아있는 진짜 컴퓨터로 자동 전달</b>된다.</p>
+<p><b>왜 나눴나 (핵심):</b> Pod 는 계속 죽고 새로 태어나 IP 가 매번 바뀐다. 그 앞에 <b>절대 안 바뀌는 간판(Service)</b>을 하나 세워두면, 쓰는 쪽은 <b>간판 이름 하나만</b> 기억하면 된다 — 뒤에서 Pod 가 몇 번을 바뀌든 상관없이. 이 "고정 간판" 하나를 위해 Service 네트워크가 존재한다.</p>
+</div>
+
+<div class="aha">
+<span class="label">딱 이거 하나만</span>
+<p><b>Pod IP = 실제 집 주소.</b> 진짜 집이 있고, 택배가 그리로 간다. 하지만 사람이 이사 가면
+(Pod 가 죽으면) 그 주소는 없어진다. 매번 새 집, 새 주소다.</p>
+<p><b>Service IP(ClusterIP) = 안 바뀌는 <u>사서함 번호</u>.</b> 그 번호에는 <b>실제 건물이 없다.</b>
+그냥 우체국 장부에 적힌 한 줄일 뿐 — "이 사서함으로 온 택배는 <em>지금 살아있는 집</em> 중 하나로
+돌려보내라." 사람이 이사 가도 <b>사서함 번호는 그대로</b>고, 우체국 직원(kube-proxy)이
+장부의 "돌려보낼 실제 집 주소"만 새 주소로 고쳐 적는다.</p>
+<p>그래서 — 사서함 번호로 <b>직접 찾아가면 아무 건물도 없어 허탕</b>(ping 실패)이지만,
+<b>택배를 부치면</b> 우체국이 실제 집으로 돌려보내 <b>배송 성공</b>(curl 성공)이다. 이 한 문장이
+이 레슨의 전부다. 아래는 그걸 증명하는 과정일 뿐.</p>
+</div>
+
+<table class="cmp">
+<tr><th></th><th>Pod IP</th><th>Service IP (ClusterIP)</th></tr>
+<tr><td>비유</td><td>실제 집 주소</td><td>안 바뀌는 사서함 번호</td></tr>
+<tr><td>실제 건물이?</td><td><b>있다</b> (진짜 네트워크 인터페이스)</td><td><b>없다</b> (장부 속 한 줄)</td></tr>
+<tr><td>Pod 죽으면?</td><td>주소도 사라짐</td><td>번호는 그대로, 돌려보낼 집만 갱신</td></tr>
+<tr><td>직접 찾아가면 (ping)</td><td>됨 (집이 있으니)</td><td>허탕 (건물이 없으니)</td></tr>
+<tr><td>택배 부치면 (curl)</td><td>배송됨</td><td>배송됨 (실제 집으로 전달)</td></tr>
+</table>
+
+<h2>1. 핵심 — 하나는 실물, 하나는 규칙 속의 약속</h2>
+
+<p><b>Pod 네트워크는 실제로 존재한다.</b> Pod 가 뜨면 CNI 플러그인(kindnet/Calico…)이
+<b>진짜 네트워크 인터페이스</b>를 만들고 IP 를 배정한다. 그 IP 로 패킷이 실제로 흐른다 —
+Pod 에 들어가 <code>ip addr</code> 을 치면 리눅스 커널에 실재하는 인터페이스가 보인다.
+대신 이 IP 는 <b>Pod 와 함께 죽는다</b> (0002 에서 본 그대로).</p>
+
+<p><b>Service 네트워크(ClusterIP 대역)는 실재하지 않는다.</b> <code>10.96.145.12</code> 같은
+ClusterIP 는 <b>어떤 인터페이스에도 붙어 있지 않다</b> — 그 IP 를 가진 기계도, 컨테이너도,
+네트워크 카드도 없다. 그런데 어떻게 통하나? <b>kube-proxy</b> 가 모든 노드에 iptables(또는 IPVS)
+규칙을 심어둔다:</p>
+
+<div class="aha">
+<span class="label">규칙의 내용</span>
+"목적지가 <code>10.96.145.12:80</code> 인 패킷을 보면, 목적지를 EndpointSlice(0003)에 실린
+<b>진짜 Pod IP 중 하나로 바꿔치기</b>하라." — 즉 ClusterIP 로 보낸 패킷은 ClusterIP 에
+<em>도착하는 게 아니라</em>, 노드를 떠나기도 전에 목적지가 Pod IP 로 <b>재작성(DNAT)</b>된다.
+</div>
+
+<table class="cmp">
+<tr><th></th><th>Pod 네트워크</th><th>Service 네트워크</th></tr>
+<tr><td><b>실체</b></td><td>진짜 인터페이스 + IP</td><td>가상 IP (인터페이스 없음)</td></tr>
+<tr><td><b>만드는 자</b></td><td><b>CNI</b> 플러그인</td><td><b>kube-proxy</b> (규칙만 심음)</td></tr>
+<tr><td><b>IP 수명</b></td><td>Pod 와 함께 소멸</td><td>Service 가 사는 한 불변 (0003)</td></tr>
+<tr><td><b>대역</b></td><td>Pod CIDR (예: <code>10.244.0.0/16</code>)</td><td>Service CIDR (예: <code>10.96.0.0/12</code>) — 겹치지 않게 분리</td></tr>
+<tr><td><b>하는 일</b></td><td>패킷을 실제로 나름</td><td>"어느 Pod 로 갈지" 골라 목적지를 바꿔치기</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하</span>
+0003 의 관찰 — "ClusterIP 는 불변, Pod IP 는 계속 바뀐다" — 의 이유가 이것이다.
+Pod IP 는 <b>실물</b>이라 실물(Pod)이 죽으면 같이 죽는다. ClusterIP 는 <b>규칙 속의 약속</b>일
+뿐이라 죽을 실물이 없다. Pod 가 바뀌면 kube-proxy 가 규칙의 바꿔치기 대상 목록(EndpointSlice)만
+갱신하면 된다. 비유하면 — <b>CNI 는 도로를 깔고, kube-proxy 는 도로 위 이정표를 세운다.</b>
+Service 로 보낸 패킷도 결국 <em>CNI 가 깐 도로로만</em> 달린다.
+</div>
+
+<h2>2. 요청의 여정 — <code>curl web</code> 한 번을 끝까지 따라가기</h2>
+
+<p>지금까지의 조각(DNS·DNAT·CNI)이 <b>한 요청 안에서 어떻게 이어지는지</b> 풀 트레이스로 묶어본다.
+시나리오: 클러스터 안 어떤 Pod 가 <code>curl http://web</code> 를 친다.</p>
+
+<div class="cluster"><span class="ctx">한 패킷의 일생</span>
+<span class="out">  <span class="hl">curl http://web</span>
+       │
+  ① 이름 풀기 (DNS)          CoreDNS: "web" → <span class="hl">10.96.145.12</span> (ClusterIP)
+       │                     └ 전화번호부. 아직 실물 없는 가짜 간판 주소일 뿐
+       ▼
+  ② 앱이 패킷 전송           목적지 = 10.96.145.12:80
+       │
+  ③ 노드 커널에서 바꿔치기    kube-proxy 의 iptables 규칙(DNAT):
+       │  (DNAT)             목적지를 살아있는 Pod 중 하나로 재작성
+       │                     10.96.145.12:80 → <span class="hl">10.244.0.13:80</span>
+       │                     └ 부하 분산도 여기서 (여러 Pod 중 확률적 선택)
+       ▼
+  ④ CNI 가 깐 도로로 전달     진짜 Pod IP 10.244.0.13 까지 패킷이 실제로 달림
+       │                     └ ClusterIP 행 패킷은 네트워크에 아예 안 돌아다님
+       ▼
+  ⑤ Pod 의 eth0 가 수신       실재하는 인터페이스가 받음 → nginx 응답
+       │
+  ⑥ 응답은 역방향            돌아올 때 커널이 출발지를 다시 10.96.145.12 로 되돌림
+       ▼                     (un-DNAT) → curl 은 "간판에서 답이 왔다"고 믿음
+  <span class="hl">&lt;title&gt;Welcome to nginx!&lt;/title&gt;</span></span>
+</div>
+
+<div class="aha">
+<span class="label">두 개의 번역이 연달아 일어난다</span>
+<p><b>① 이름 → 간판(DNS)</b> 과 <b>③ 간판 → 실물(DNAT)</b> 은 서로 다른 단계다.
+DNS 는 <code>web</code> 이라는 <em>이름</em>을 ClusterIP 로 바꾸고(전화번호부), DNAT 는 그 ClusterIP 를
+<em>실제 Pod IP</em> 로 바꾼다(착신 전환). 둘 다 끝나야 패킷이 갈 곳을 안다.
+그래서 "Service 가 안 돼요"는 <b>둘 중 어디서 끊겼는지</b>(DNS 인가 EndpointSlice 가 비었나)를 나눠 봐야 한다.</p>
+</div>
+
+<div class="note"><b>바깥에서 들어올 때는?</b> 노트북에서 오는 요청은 ① 대신 <b>노드IP:3xxxx</b>(NodePort, 0010)로 들어와
+<b>같은 ③ DNAT 체인</b>에 합류한다. LoadBalancer·Ingress 도 결국 이 체인 앞에 문을 하나 더 얹는 것뿐 —
+<b>최종 목적지는 언제나 EndpointSlice 의 Pod IP</b> 다.</div>
+
+<h2>3. 실습 — 가상 IP 의 증거를 잡는다</h2>
+
+<div class="note">kind 클러스터 <code>mastery</code>, namespace <code>lab</code>. 없으면 <code>kubectl create namespace lab &amp;&amp; kubectl config set-context --current --namespace=lab</code> 후 <code>kubectl create deployment web --image=nginx:1.27 --replicas=2 &amp;&amp; kubectl expose deployment web --port=80</code>.</div>
+
+<p><b>추적 1 — 두 대역이 다름을 확인.</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pods -o wide | awk '{print $1, $6}'</span>
+<span class="out">web-xxx   <span class="hl">10.244</span>.0.12    ← Pod CIDR 대역
+web-yyy   <span class="hl">10.244</span>.0.13</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get svc web</span>
+<span class="out">web   ClusterIP   <span class="hl">10.96</span>.145.12   80/TCP    ← 전혀 다른 Service CIDR 대역</span>
+</div>
+
+<p><b>추적 2 — ping 은 안 되고 curl 은 된다.</b> 클러스터 안에서 시험한다:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl run tester --image=busybox --rm -it -- sh</span>
+<span class="prompt">/ #</span> <span class="cmd">ping -c 2 -W 1 10.96.145.12</span>        <span class="hl"># Service 의 ClusterIP (본인 값으로)</span>
+<span class="out">2 packets transmitted, <span class="hl">0 packets received</span>   ← 실체가 없으니 응답할 자가 없다</span>
+<span class="prompt">/ #</span> <span class="cmd">wget -qO- 10.96.145.12 | grep title</span>
+<span class="out">&lt;title&gt;<span class="hl">Welcome to nginx!</span>&lt;/title&gt;          ← 그런데 HTTP 는 된다?!</span>
+<span class="prompt">/ #</span> <span class="cmd">ping -c 2 10.244.0.12</span>               <span class="hl"># 이번엔 진짜 Pod IP</span>
+<span class="out">2 packets transmitted, <span class="hl">2 packets received</span>   ← 실물이라 ping 도 된다</span>
+</div>
+
+<div class="warn">
+<b>이 비대칭이 가상 IP 의 지문이다.</b> kube-proxy 규칙은 Service 에 정의된 <b>TCP/UDP 포트</b>에만
+바꿔치기를 걸어둔다. ping(ICMP)은 그 규칙에 안 걸리고, 규칙 밖에서 <code>10.96.145.12</code> 는
+아무것도 아닌 주소다 — 그래서 침묵한다. 실기 디버깅에서 "Service 가 ping 안 돼요"는
+<b>고장이 아니다</b>. 확인은 항상 <code>curl <em>IP:port</em></code> 로.
+</div>
+
+<p><b>추적 3 (선택) — 바꿔치기 규칙을 눈으로.</b> 노드(도커 컨테이너) 안의 iptables 를 직접 본다:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">docker exec mastery-control-plane iptables -t nat -L KUBE-SERVICES -n | grep 10.96.145.12</span>
+<span class="out">KUBE-SVC-...  tcp  dst <span class="hl">10.96.145.12</span> tcp dpt:80   ← "이 목적지를 보면 저 체인으로" 라는 이정표</span>
+</div>
+
+<p>이 체인을 따라가면 결국 Pod IP 로의 DNAT 에 닿는다 — ClusterIP 의 실체는 이 규칙 몇 줄이 전부다.
+정리: <code>exit</code> 로 tester 를 빠져나오면 <code>--rm</code> 이 알아서 지운다.</p>
+
+<h2>4. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. 클러스터 안에서 ClusterIP 로 ping 을 보내면 응답이 없다. 그러나 같은 IP 로 curl 은 된다. 이유는?</p>
+  <div class="opts">
+    <button class="opt">Service 가 보안상 ICMP 를 차단하도록 기본 설정돼 있다</button>
+    <button class="opt" data-correct="true">ClusterIP 는 실체 없는 가상 주소고, kube-proxy 규칙이 정의된 TCP 포트에만 바꿔치기를 건다</button>
+    <button class="opt">CNI 플러그인이 ICMP 를 지원하지 않는 경량 버전이다</button>
+  </div>
+  <div class="explain">ClusterIP 에는 응답할 실물이 없다. curl 이 되는 건 목적지가 노드를 떠나기 전에 진짜 Pod IP 로 DNAT 되기 때문 — 그 규칙은 Service 에 정의된 포트(TCP/UDP)에만 존재하므로 ICMP(ping)는 그냥 허공으로 간다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. Pod 네트워크와 Service 네트워크를 각각 책임지는 컴포넌트의 짝은?</p>
+  <div class="opts">
+    <button class="opt">Pod → kube-proxy / Service → CNI 플러그인</button>
+    <button class="opt" data-correct="true">Pod → CNI 플러그인 (도로를 깖) / Service → kube-proxy (이정표를 세움)</button>
+    <button class="opt">둘 다 kubelet 이 CRI 를 통해 관리한다</button>
+  </div>
+  <div class="explain">CNI 는 Pod 에 진짜 인터페이스와 IP 를 만들어 패킷이 달릴 도로를 깐다. kube-proxy 는 그 도로 위에 "ClusterIP 목적지는 이 Pod 로 바꿔치기"라는 이정표(iptables/IPVS 규칙)를 세울 뿐, 패킷을 직접 나르지 않는다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0003 복습) Pod 들이 전부 죽었다 새로 태어나도 ClusterIP 가 절대 안 바뀌는 근본 이유는?</p>
+  <div class="opts">
+    <button class="opt">쿠버네티스가 Service 재시작 시 같은 IP 를 재예약해 주기 때문</button>
+    <button class="opt" data-correct="true">ClusterIP 는 죽을 실물이 없는 규칙 속의 약속이라, Pod 교체 시 규칙의 대상 목록만 갱신되기 때문</button>
+    <button class="opt">Service 가 각 노드의 전용 포트에 고정 바인딩돼 있기 때문</button>
+  </div>
+  <div class="explain">간격 반복: Pod IP 는 실물(인터페이스)에 묶여 실물과 함께 소멸하지만, ClusterIP 는 iptables 규칙 속 문자열일 뿐이다. Pod 가 바뀌면 kube-proxy 가 EndpointSlice 를 보고 바꿔치기 대상만 갱신한다 — 약속 자체는 그대로.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2 를 맞히면 이 심화는 충분 — KCNA 수준을 살짝 넘는 내용이라 부담 없이.
+본선 복귀: 다음은 <b>클라우드 네이티브 어휘 일괄</b>(CNCF 생태계 · 12-factor · 관측성 3기둥 · GitOps · Helm),
+그다음이 <b>KCNA 전 도메인 모의 진단</b>이다.
+</div>
+
+<h2>부록 A — CIDR 읽는 법 (<code>/16</code> 이 뭐지?)</h2>
+<p class="note">위 <b>대역</b> 행에 나온 <code>10.244.0.0/16</code>, <code>10.96.0.0/12</code> 의 <code>/숫자</code>가 낯설면 여기부터. 네트워크·방화벽·NetworkPolicy 에서 계속 재활용되는 기본 표기다.</p>
+
+<div class="aha">
+<span class="label">한 줄 정의</span>
+<p>CIDR = <b>"이 IP들 묶음"을 <code>시작주소/고정비트수</code> 로 적은 것.</b> IP 하나가 아니라 <b>범위(대역)</b>를 가리킨다.</p>
+</div>
+
+<p><b>원리 — IP 는 32 개의 비트.</b> <code>10.244.0.0</code> 은 사실 0/1 비트 32 개다 (8 비트씩 4 칸). <code>/16</code> 은 "앞 16 비트는 고정, 나머지 16 비트는 아무 값이나"라는 뜻:</p>
+
+<div class="cluster"><span class="ctx">10.244.0.0/16</span>
+<span class="out">00001010.11110100 . xxxxxxxx.xxxxxxxx
+└── <span class="hl">고정 (16 비트)</span> ──┘   └── 자유 (16 비트) ──┘
+
+→ 10.244.<span class="hl">0.0</span> 부터 10.244.<span class="hl">255.255</span> 까지 전부</span>
+</div>
+
+<p>Pod 가 뜰 때마다 이 범위에서 IP 를 하나씩 받는다. <code>/숫자</code>가 <b>클수록 고정 비트가 많아 범위는 작다</b>:</p>
+
+<table class="cmp">
+<tr><th>CIDR</th><th>고정 / 자유 비트</th><th>주소 개수</th><th>범위</th></tr>
+<tr><td><code>/8</code></td><td>8 / 24</td><td>약 1,600만</td><td><code>10.0.0.0</code> ~ <code>10.255.255.255</code></td></tr>
+<tr><td><code>/16</code></td><td>16 / 16</td><td>약 65,000</td><td><code>10.244.0.0</code> ~ <code>10.244.255.255</code></td></tr>
+<tr><td><code>/24</code></td><td>24 / 8</td><td>256</td><td><code>10.244.0.0</code> ~ <code>10.244.0.255</code></td></tr>
+<tr><td><code>/32</code></td><td>32 / 0</td><td>1 (딱 그 주소)</td><td><code>10.244.0.12</code> 하나</td></tr>
+</table>
+
+<p><code>/32</code> 는 자유 비트가 0 이라 IP 딱 하나 — 그래서 방화벽 규칙에서 "이 IP 하나만"을 <code>10.244.0.12/32</code> 로 적는다.</p>
+
+<div class="aha">
+<span class="label">0013 과 연결</span>
+<p>이 레슨에서 두 대역이 <b>안 겹쳐야</b> 한다고 했다:</p>
+<p>• <b>Pod CIDR</b> <code>10.244.0.0/16</code> → <code>10.244.*.*</code><br>
+• <b>Service CIDR</b> <code>10.96.0.0/12</code> → <code>10.96.*.*</code> ~ <code>10.111.*.*</code></p>
+<p><code>10.244.x</code> 와 <code>10.96.x</code> 는 서로 다른 묶음이라 안 겹친다. 그래서 어떤 IP 를 보면 <b>앞자리만으로</b> "얘는 Pod IP / Service(가상) IP" 를 바로 구분할 수 있다. 겹치면 이 구분이 깨져 라우팅이 망가진다.</p>
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">실습하다 떠오르는 "어? 이건 왜 이러지?"를 미리 모았다. 궁금한 것만 펼쳐 보면 된다 — 안 궁금하면 접힌 채 넘어가도 된다.</p>
+
+<details class="faq">
+<summary>DNAT 가 뭐예요?</summary>
+<div class="a"><p>Destination NAT — 패킷의 <b>목적지 주소를 바꿔치기</b>하는 리눅스 커널 기능이다. 공유기가 포트포워딩할 때 쓰는 그 기술과 같다. kube-proxy 는 이 기능으로 "ClusterIP 행" 패킷을 "Pod IP 행"으로 고쳐 쓴다.</p></div>
+</details>
+
+<details class="faq">
+<summary>그럼 DNS 이름(<code>web</code>)으로 부를 때는요? 0003 에서 이름으로 접속했잖아요.</summary>
+<div class="a"><p>두 단계다. 먼저 클러스터 DNS(CoreDNS)가 <code>web</code> → ClusterIP 로 <b>이름을 풀고</b>, 그다음 오늘 배운 DNAT 가 그 ClusterIP 를 Pod IP 로 <b>바꿔치기</b>한다. DNS 는 전화번호부, DNAT 는 착신 전환인 셈이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>부하 분산은 누가 해요? 여러 Pod 중 하나를 고르는 거요.</summary>
+<div class="a"><p>같은 iptables/IPVS 규칙이 한다 — 바꿔치기 대상 Pod 를 확률적으로(iptables) 또는 알고리즘으로(IPVS) 고른다. 별도의 로드밸런서 프로세스가 있는 게 아니라, <b>커널의 규칙 자체가 분산기</b>다. 그래서 Service 는 성능 병목이 거의 없다.</p></div>
+</details>
+
+<details class="faq">
+<summary>iptables 랑 IPVS, 뭐가 달라요?</summary>
+<div class="a"><p>kube-proxy 가 규칙을 심는 두 가지 백엔드다. iptables 는 규칙을 위에서부터 순서대로 훑고(Service 수천 개면 느려짐), IPVS 는 해시 테이블이라 Service 가 많아도 일정 속도다. 소규모에선 차이가 없고, KCNA 는 "kube-proxy 의 두 모드" 정도면 충분하다.</p></div>
+</details>
+
+<details class="faq">
+<summary>패킷이 노드를 "떠나기 전에" 바뀐다는 게 무슨 뜻이에요?</summary>
+<div class="a"><p>DNAT 규칙이 <b>보내는 쪽 노드</b>의 커널에서 걸린다는 뜻이다. tester Pod 가 ClusterIP 로 패킷을 쏘면, 그 패킷이 노드의 네트워크 스택을 지나는 순간 목적지가 이미 Pod IP 로 바뀌어 있다. 네트워크 상에는 ClusterIP 행 패킷이 아예 돌아다니지 않는다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Pod CIDR 랑 Service CIDR 는 누가 정해요?</summary>
+<div class="a"><p>클러스터를 만들 때 정해진다 — kubeadm/kind 의 설정값(<code>podSubnet</code>, <code>serviceSubnet</code>)이다. 두 대역이 겹치면 "이 IP 가 Pod 인지 Service 인지" 구분이 깨져 대참사이므로, 반드시 서로 다른 대역이어야 한다. 회사 VPN 대역과도 안 겹치게 잡는 게 실무 포인트다.</p></div>
+</details>
+
+<details class="faq">
+<summary>headless service(0009)는 이 그림에서 어디에 있어요?</summary>
+<div class="a"><p>가상 IP 를 <b>포기한</b> Service 다. <code>clusterIP: None</code> 이면 kube-proxy 가 바꿔치기 규칙을 안 만들고, DNS 가 곧바로 <b>Pod IP 들을</b> 돌려준다. 즉 "이정표 없이 도로 주소를 직접 알려주는" 모드 — 특정 인스턴스를 집어야 하는 StatefulSet 과 짝인 이유다.</p></div>
+</details>
+
+<details class="faq">
+<summary>NodePort(0010)도 이 바꿔치기의 연장인가요?</summary>
+<div class="a"><p>맞다. NodePort 는 "노드IP:3xxxx 로 온 패킷도 같은 바꿔치기 체인에 태워라"는 규칙이 하나 더 붙은 것뿐이다. 그래서 0010 에서 "NodePort 는 ClusterIP 를 포함한다"고 했던 것 — 최종 목적지는 언제나 EndpointSlice 의 Pod IP 다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Pod 안에서 <code>ip addr</code> 로 진짜 인터페이스를 보려면 어떻게 해요?</summary>
+<div class="a"><p><code>kubectl exec &lt;pod&gt; -- ip addr</code> (이미지에 ip 명령이 있어야 한다 — busybox 는 있다). <code>eth0</code> 에 Pod IP 가 붙어 있는 게 보인다. 반대로 어떤 Pod/노드에서도 ClusterIP 가 붙은 인터페이스는 못 찾는다 — 그게 오늘의 요점이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>이 내용이 KCNA 에 직접 나오나요?</summary>
+<div class="a"><p>이 깊이(DNAT, iptables)까지는 잘 안 나온다 — KCNA 는 "kube-proxy 가 Service 트래픽을 담당한다" 수준이다. 하지만 이 그림이 있으면 Service 관련 문제를 암기가 아니라 추론으로 풀 수 있고, CKA 의 네트워크 트러블슈팅에서 진짜 값어치를 한다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/reference/networking/virtual-ips/">공식 문서: Virtual IPs and Service Proxies</a> —
+오늘 내용의 원전 (iptables/IPVS 모드, DNAT 흐름).
+<a href="https://kubernetes.io/docs/concepts/cluster-administration/networking/">Cluster Networking</a> 은 Pod 네트워크 모델의 원전.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "eBPF 모드(kube-proxy 대체)는 뭐지?", "externalTrafficPolicy 로 source IP 를 보존한다는 게 뭔가?",
+"NetworkPolicy 는 이 그림의 어느 층에서 막나?" — 마지막 질문은 Level 2(KCSA)로 이어지는 실이다.
+</div>
+
+<nav class="nav">
+  <a href="0012-interfaces-cri-cni-csi.html">← 0012 인터페이스 3형제</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

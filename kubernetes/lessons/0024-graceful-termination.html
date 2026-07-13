@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0024 — 우아한 종료: Pod 는 어떻게 곱게 죽나</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0024 <span class="tag">Fundamentals 심화</span></p>
+<h1>우아한 종료 — Pod 는 어떻게 곱게 죽나</h1>
+<p class="subtitle"><code>kubectl delete pod</code> 를 치는 순간부터 컨테이너가 사라지기까지, <b>Terminating</b> 동안 병렬로 벌어지는 두 가지 일 — 트래픽 차단과 SIGTERM — 을 정확한 시퀀스로 새긴다. "죽이는 게 아니라 마무리할 시간을 준다."</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> Pod 삭제가 <b>즉시 kill 이 아니라 유예(grace period)를 둔 협상</b>임을 손으로 확인한다.
+삭제 순간 (a) <b>0003</b> 의 EndpointSlice 에서 빠져 새 트래픽이 끊기고, (b) <code>preStop</code> 훅 → <code>SIGTERM</code> →
+<code>terminationGracePeriodSeconds</code> 대기 → <code>SIGKILL</code> 로 이어지는 순서를 <code>time kubectl delete</code> 로 <b>직접 시간을 재</b> 눈에 새긴다.
+이게 <b>0014</b> 의 12-factor "disposability(빠른 종료)"와 <b>0002</b> 롤링 업데이트가 조용히 기대고 있던 바로 그 메커니즘이다.
+</div>
+
+<h2>1. 삭제는 즉사가 아니다 — Terminating 이라는 유예</h2>
+
+<p><code>kubectl delete pod X</code> 를 쳐도 Pod 는 그 자리에서 사라지지 않는다. API 서버는 Pod 에
+<b><code>metadata.deletionTimestamp</code></b> 를 찍을 뿐이고, 이 순간부터 Pod 는 <b>Terminating</b> 상태로 들어간다.
+<b>0023</b> 에서 본 "deletionTimestamp 가 찍힌 Pod = 종료 진행 중"이 바로 여기서 시작된다.</p>
+
+<div class="aha">
+<span class="label">아하 — deletionTimestamp 는 "죽어라"가 아니라 "정리하고 나가라"</span>
+timestamp 가 찍히면 그때부터 <b>유예 시계(grace period)</b>가 돌기 시작한다. 기본 <b>30초</b>.
+그 시간 안에 컨테이너가 스스로 마무리하고 나가면 곱게 끝, 못 나가면 시간이 다 됐을 때 <b>강제로 kill</b> 된다.
+즉 삭제는 <b>"이제 곧 자를 테니 하던 일 마무리해"</b>라는 예고이지, 즉각적인 처형이 아니다.
+</div>
+
+<h2>2. Terminating 동안 병렬로 벌어지는 두 가지</h2>
+
+<p>deletionTimestamp 가 찍히면 <b>동시에 두 갈래</b>가 진행된다. 이 둘이 <b>병렬</b>이라는 게 뒤(5절 경합)에서 문제의 씨앗이 된다.</p>
+
+<table class="cmp">
+<tr><th></th><th>(a) 네트워크 갈래</th><th>(b) 프로세스 갈래</th></tr>
+<tr>
+  <td><b>무슨 일</b></td>
+  <td>Service 의 <b>EndpointSlice</b> 에서 이 Pod 가 <b>제거</b>됨</td>
+  <td>컨테이너를 <b>순서대로 종료</b> 시작</td>
+</tr>
+<tr>
+  <td><b>효과</b></td>
+  <td><b>새 트래픽</b>이 이 Pod 로 더는 안 감</td>
+  <td>preStop → SIGTERM → 대기 → SIGKILL</td>
+</tr>
+<tr>
+  <td><b>연결</b></td>
+  <td><b>0003</b> EndpointSlice 컨트롤러의 제어 루프가 "not-ready"로 빼고, <b>0013</b> kube-proxy 가 규칙에서 지운다</td>
+  <td>이 레슨 3절의 훅·시그널 시퀀스</td>
+</tr>
+</table>
+
+<div class="note"><b>0003 과 이어짐:</b> Service 가 Pod 를 <b>label selector 로 추적</b>하고 그 결과가 EndpointSlice 에 실시간 기록된다고 했다.
+Pod 가 Terminating 이 되면 EndpointSlice 컨트롤러가 이 Pod 를 <code>ready:false</code>(terminating)로 표시 → 곧 목록에서 빠진다.
+그래야 <b>새</b> 연결이 이미 종료 중인 Pod 로 라우팅되지 않는다. 이건 <b>0004</b> 의 readiness probe 가 실패했을 때 endpoint 에서 빠지던 것과 같은 창구다.</div>
+
+<h2>3. 프로세스 갈래의 정확한 시퀀스</h2>
+
+<p>컨테이너를 종료하는 (b) 갈래는 <b>정해진 순서</b>로 흐른다. 순서를 헷갈리면 대부분의 "왜 요청이 유실되지?" 오해가 나온다.</p>
+
+<table class="cmp">
+<tr><th>순서</th><th>단계</th><th>설명</th></tr>
+<tr><td><b>1</b></td><td><code>preStop</code> 훅 실행</td><td><b>SIGTERM 보내기 <em>전</em></b>. <b>블로킹</b> — 훅이 끝나야 다음으로 간다. (있을 때만)</td></tr>
+<tr><td><b>2</b></td><td>컨테이너 PID 1 에 <b>SIGTERM</b></td><td>"이제 종료해" 신호. 앱이 이걸 받아 in-flight 요청을 마무리해야 한다.</td></tr>
+<tr><td><b>3</b></td><td><b>grace period 대기</b></td><td><code>terminationGracePeriodSeconds</code>(기본 30s). preStop 에 쓴 시간도 <b>이 예산에서 차감</b>된다.</td></tr>
+<tr><td><b>4</b></td><td>아직 살아있으면 <b>SIGKILL</b></td><td>커널이 강제 종료(9번, 무시 불가). 여기 걸리면 in-flight 요청은 그냥 끊긴다.</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">핵심 세 가지</span>
+① <b>preStop 은 SIGTERM "전"</b>에, 블로킹으로 돈다. ② grace period 는 preStop + SIGTERM 후 정리시간을 <b>합쳐서</b> 재는 총예산이다 —
+preStop 에 25초를 쓰면 SIGTERM 뒤엔 5초밖에 안 남는다. ③ 앱이 SIGTERM 을 <b>무시</b>하면 grace 끝에 무조건 SIGKILL 이라,
+곱게 죽을 기회를 스스로 버리는 것이다.
+</div>
+
+<div class="note"><b>postStart 와 헷갈리지 말 것:</b> <code>postStart</code> 훅은 컨테이너가 <b>시작된 직후</b> 실행되는 짝이지만,
+컨테이너 entrypoint 와 <b>실행 순서가 보장되지 않는다</b>(둘이 거의 동시에 뜬다). preStop 은 종료 쪽, postStart 는 시작 쪽 — 대칭이지만 보장 강도가 다르다.</div>
+
+<h2>4. 앱이 SIGTERM 을 처리해야 하는 이유 — disposability 의 실제 구현</h2>
+
+<p>SIGTERM 은 "정리하고 나가라"는 <b>정중한 요청</b>이다. 잘 만든 앱은 이걸 받으면:
+① 새 요청 접수 중단, ② <b>in-flight 요청 마무리</b>, ③ DB/커넥션 정리 후 <b>스스로 종료</b>한다.
+그러면 grace period 가 다 차기 전에 곱게 끝나고 SIGKILL 은 발동조차 안 한다.</p>
+
+<div class="aha">
+<span class="label">0014 와 연결 — 이게 12-factor 의 그 원칙이다</span>
+<b>0014</b> 12-factor 의 "프로세스는 <b>disposable</b> — 빠르게 뜨고 <b>우아하게 죽어야</b> 한다"가 추상론이 아니라
+바로 이 <b>SIGTERM 처리</b>로 구현된다. "언제 죽어도 되는 stateless 프로세스"라는 <b>0002</b> 의 명제도,
+Pod 가 <b>이렇게 안전하게 종료될 수 있어야</b> 성립한다. 우아한 종료 = disposability 의 하드웨어.
+</div>
+
+<div class="warn">
+<b>강제 삭제는 최후의 수단:</b> <code>kubectl delete pod X --grace-period=0 --force</code> 는 grace period 를 <b>0으로</b> 만들어
+preStop·SIGTERM 을 <b>건너뛰고 즉시</b> API 오브젝트를 지운다. in-flight 요청은 그냥 끊기고, StatefulSet 같은 경우엔
+<b>데이터 정합성까지 깨질 수 있다</b>(다른 노드에서 같은 Pod 가 뜨는 split-brain). 노드가 완전히 죽어 응답이 없을 때 같은
+예외 상황에서만. 평소엔 절대 습관화하지 말 것.
+</div>
+
+<h2>5. 경합 문제와 preStop sleep 패턴</h2>
+
+<p>2절에서 (a)네트워크와 (b)프로세스가 <b>병렬</b>이라고 했다. 문제는 이 둘의 순서가 <b>완벽히 보장되지 않는다</b>는 것이다.
+SIGTERM 이 도착해 앱이 종료를 시작했는데, <b>0013</b> 의 kube-proxy 규칙(iptables/ipvs) 갱신이 아직 안 끝나
+<b>새 요청이 이 종료 중인 Pod 로 몇 개 더 들어올</b> 수 있다. 그 요청들은 커넥션이 거부되어 유실된다.</p>
+
+<div class="aha">
+<span class="label">해법 — preStop 에 짧은 sleep</span>
+<code>preStop</code> 에 <code>sleep 5~10</code> 을 넣는 게 흔한 관용구다. SIGTERM 을 <b>일부러 몇 초 늦춰</b>서,
+그 사이 <b>0003</b> EndpointSlice 제거가 전파되고 <b>0013</b> kube-proxy 규칙이 갱신될 <b>시간을 벌어준다</b>.
+즉 "앱은 아직 멀쩡히 요청을 받는데, 라우팅은 이미 나를 뺐다" 상태를 만들어 <b>요청 유실을 없앤다</b>.
+sleep 이 끝나야 SIGTERM 이 가므로, 앱은 그동안 정상 응답을 계속한다.
+</div>
+
+<div class="note"><b>0002 롤링 업데이트가 여기에 기댄다:</b> <b>0002</b> 의 rolling update 는 "새 Pod 를 Ready 로 올리고 <b>옛 Pod 를 종료</b>"의 반복이었다.
+그 "옛 Pod 종료"가 바로 이 우아한 종료 시퀀스다. preStop sleep + SIGTERM 처리가 제대로 안 되어 있으면,
+배포할 때마다 <b>매번 요청이 몇 개씩 유실</b>된다 — "무중단 배포"가 실제로는 무중단이 아니게 된다. 우아한 종료는 롤링 업데이트의 숨은 전제다.</div>
+
+<h2>6. Hands-on — preStop 이 붙잡는 걸 시간으로 확인 (kind <code>mastery</code>)</h2>
+
+<div class="note">kind 클러스터 <code>mastery</code> 이어서 사용. <b>0006·0020</b> 처럼 <code>lab</code> namespace 에서 격리한다.
+없으면: <code>kind create cluster --name mastery</code>.</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl create namespace lab 2&gt;/dev/null; kubectl config set-context --current --namespace=lab</span>
+</div>
+
+<p><b>preStop(sleep 10) + grace 30초 인 Pod 를 만든다.</b> heredoc 으로 바로 apply:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f - &lt;&lt;'EOF'</span>
+<span class="out">apiVersion: v1
+kind: Pod
+metadata:
+  name: graceful
+spec:
+  terminationGracePeriodSeconds: 30      <span class="hl"># SIGTERM 후 SIGKILL 까지 총예산</span>
+  containers:
+  - name: app
+    image: nginx:1.27
+    lifecycle:
+      preStop:
+        exec:
+          command: ["/bin/sh", "-c", "sleep 10"]   <span class="hl"># SIGTERM 전에 10초 붙잡음(블로킹)</span></span>
+<span class="cmd">EOF</span>
+<span class="out">pod/graceful created</span>
+<span class="prompt">$</span> <span class="cmd">kubectl wait --for=condition=Ready pod/graceful --timeout=60s</span>
+<span class="out">pod/graceful condition met</span>
+</div>
+
+<p><b>다른 터미널</b>에서 상태를 지켜본다 — Terminating 이 뜨는 걸 실시간으로 본다:</p>
+
+<div class="cluster"><span class="ctx">terminal 2 (watch)</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pod graceful -w</span>
+<span class="out">NAME       READY   STATUS    RESTARTS   AGE
+graceful   1/1     Running   0          20s
+graceful   1/1     <span class="hl">Terminating</span>   0          25s   <span class="hl"># delete 순간 여기로 — 아직 살아있다</span>
+graceful   0/1     Terminating   0          35s   <span class="hl"># preStop sleep 10 이 끝나고 종료</span></span>
+</div>
+
+<p><b>원래 터미널</b>에서 <code>time</code> 으로 삭제 시간을 잰다 — preStop 이 붙잡아 <b>~10초 이상</b> 걸리는 게 핵심 관찰:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">time kubectl delete pod graceful</span>
+<span class="out">pod "graceful" deleted
+<span class="hl">kubectl delete pod graceful  ... 10.4s total</span>   <span class="hl"># preStop sleep 10 만큼 붙잡힘</span></span>
+</div>
+
+<div class="aha">
+<span class="label">무엇을 봤나</span>
+① delete 는 즉시 안 끝나고 <b>preStop sleep 만큼(~10초)</b> 붙잡혔다 = preStop 이 <b>SIGTERM 전에, 블로킹</b>으로 돈다는 증거.
+② 그동안 Pod 는 <b>Terminating</b> 이지만 <b>여전히 살아 요청을 받을 수 있다</b> — 5절 sleep 패턴이 요청 유실을 막는 원리 그대로.
+③ nginx 는 SIGTERM 을 잘 처리하므로 grace 30초를 다 쓰지 않고 sleep 직후 곱게 끝났다(SIGKILL 미발동).
+</div>
+
+<p><b>대비 실험 — 강제 삭제는 즉시다.</b> 다시 만들고 <code>--grace-period=0 --force</code> 로 지워 시간을 비교해 본다:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f - &lt;&lt;'EOF'</span>
+<span class="out">apiVersion: v1
+kind: Pod
+metadata: { name: graceful }
+spec:
+  terminationGracePeriodSeconds: 30
+  containers:
+  - { name: app, image: nginx:1.27, lifecycle: { preStop: { exec: { command: ["/bin/sh","-c","sleep 10"] } } } }</span>
+<span class="cmd">EOF</span>
+<span class="prompt">$</span> <span class="cmd">kubectl wait --for=condition=Ready pod/graceful --timeout=60s</span>
+<span class="prompt">$</span> <span class="cmd">time kubectl delete pod graceful --grace-period=0 --force</span>
+<span class="out">Warning: Immediate deletion does not wait for confirmation that the running resource has been terminated. ...
+pod "graceful" force deleted
+<span class="hl">kubectl delete ...  ... 0.3s total</span>   <span class="hl"># preStop·SIGTERM 다 건너뛰고 즉시 — 위험한 이유</span></span>
+</div>
+
+<p>정리: <code>kubectl delete ns lab &amp;&amp; kubectl config set-context --current --namespace=default</code>.</p>
+
+<div class="note"><b>KCNA 범위 표시:</b> KCNA 는 "Pod 삭제 시 grace period 를 두고 우아하게 종료된다 / SIGTERM 후 SIGKILL"이라는
+<b>개념</b>까지가 시험 범위다. preStop/postStart 훅의 정확한 문법, sleep 경합 패턴, grace period 튜닝 같은 <b>상세는 CKAD 심화</b> 몫 —
+여기선 손으로 한 번 만져 직관만 확실히 새기고 넘어가면 충분하다.</div>
+
+<h2>7. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. <code>kubectl delete pod X</code> 를 쳤을 때 컨테이너의 프로세스 갈래에서 벌어지는 <b>순서</b>로 옳은 것은?</p>
+  <div class="opts">
+    <button class="opt">SIGTERM → preStop 훅 → grace 대기 → SIGKILL</button>
+    <button class="opt" data-correct="true">preStop 훅 → SIGTERM → grace 대기 → (남으면) SIGKILL</button>
+    <button class="opt">SIGKILL 즉시 → 그다음 preStop 훅으로 정리</button>
+  </div>
+  <div class="explain">preStop 은 SIGTERM <b>전</b>에 블로킹으로 돈다. 그다음 PID 1 에 SIGTERM, <code>terminationGracePeriodSeconds</code> 만큼 대기, 그때도 살아있으면 SIGKILL(강제). SIGKILL 은 마지막 수단이지 시작이 아니다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. (레슨 0003·0013 복습) preStop 에 <code>sleep 5</code> 를 넣는 흔한 이유로 가장 정확한 것은?</p>
+  <div class="opts">
+    <button class="opt">컨테이너가 더 오래 살아 CPU 를 절약하려고</button>
+    <button class="opt" data-correct="true">SIGTERM 을 몇 초 늦춰, 그동안 EndpointSlice 제거와 kube-proxy 규칙 갱신이 전파되어 <b>새 요청이 종료 중 Pod 로 안 들어오게</b> 시간을 벌려고</button>
+    <button class="opt">grace period 를 30초에서 5초로 줄이려고</button>
+  </div>
+  <div class="explain">네트워크(EndpointSlice 제거·kube-proxy 갱신)와 프로세스(SIGTERM)가 <b>병렬</b>이라 순서가 완벽히 보장 안 된다. 짧은 sleep 으로 SIGTERM 을 늦추면 그 사이 라우팅이 나를 빼는 게 전파되어 <b>요청 유실(0003·0013)</b>을 막는다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0014 복습) 앱이 SIGTERM 을 <b>무시하도록</b> 짜여 있으면 어떻게 되나?</p>
+  <div class="opts">
+    <button class="opt">Pod 가 영원히 안 죽어 삭제가 실패한다</button>
+    <button class="opt" data-correct="true"><code>terminationGracePeriodSeconds</code> 가 다 차면 <b>SIGKILL 로 강제 종료</b>되어, in-flight 요청은 마무리 못 하고 끊긴다 — 12-factor disposability 를 스스로 버린 것</button>
+    <button class="opt">쿠버네티스가 SIGTERM 을 세 번 재전송하다 포기한다</button>
+  </div>
+  <div class="explain">간격 반복: SIGTERM 은 무시 <b>가능</b>하지만 SIGKILL 은 불가능하다. 앱이 SIGTERM 을 안 받으면 grace 끝에 무조건 SIGKILL 이라 곱게 죽을 기회를 버린다. <b>0014</b> 의 "우아하게 죽어야 한다(disposability)"가 바로 이 SIGTERM 처리로 구현됨을 뒤집어 보여주는 경우다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2·Q3 를 맞히면 <b>삭제 시퀀스</b>(preStop→SIGTERM→grace→SIGKILL), <b>경합과 sleep 패턴</b>, <b>SIGTERM 처리의 당위</b>가 ✅ —
+"Pod 는 왜 즉시 안 죽나", "무중단 배포(0002)는 뭘 믿고 도나"에 정확히 답할 수 있다. 삭제가 처형이 아니라 <b>협상</b>임을 이제 안다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">종료는 "즉시"라는 직관과 어긋나 헷갈리기 쉽다. 궁금한 것만 펼쳐 보면 된다.</p>
+
+<details class="faq">
+<summary>Pod 가 왜 delete 하자마자 안 사라지고 Terminating 에 머물러요?</summary>
+<div class="a"><p>삭제는 즉사가 아니라 <b>유예를 둔 종료</b>이기 때문이다. API 서버는 <code>deletionTimestamp</code> 를 찍어 "종료 시작"만 표시하고(<b>0023</b>), kubelet 이 preStop→SIGTERM→grace 대기를 거친다. 이 과정 내내 Pod 는 <b>Terminating</b> 으로 보인다. 컨테이너가 다 정리되고 나가야 오브젝트가 진짜 삭제된다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>terminationGracePeriodSeconds</code> 기본값은 얼마예요? 어떻게 바꿔요?</summary>
+<div class="a"><p>기본 <b>30초</b>다. Pod spec 의 <code>spec.terminationGracePeriodSeconds</code> 로 바꾼다. 종료에 오래 걸리는 앱(큰 배치 마무리, 커넥션 드레인)은 늘리고, 빨리 죽어도 되는 stateless 앱은 그대로 둔다. 삭제할 때 <code>kubectl delete pod X --grace-period=60</code> 로 그 한 번만 덮어쓸 수도 있다.</p></div>
+</details>
+
+<details class="faq">
+<summary>preStop 훅이랑 SIGTERM, 결국 둘 다 "종료해"인데 왜 둘 다 있어요?</summary>
+<div class="a"><p>역할이 다르다. <b>SIGTERM</b> 은 <b>앱 프로세스에게</b> 보내는 신호라, 앱이 시그널 핸들러를 짜 넣어야 반응한다. <b>preStop</b> 은 <b>앱을 안 고치고</b> 종료 직전 임의 명령(sleep, drain 스크립트, 종료 API 호출)을 끼워 넣는 훅이다. 앱 소스를 못 건드릴 때, 또는 5절처럼 SIGTERM 을 일부러 늦출 때 preStop 이 필요하다.</p></div>
+</details>
+
+<details class="faq">
+<summary>preStop 에 쓴 시간도 grace period 에서 까이나요?</summary>
+<div class="a"><p>그렇다. <code>terminationGracePeriodSeconds</code> 는 <b>preStop + SIGTERM 후 정리</b>를 <b>합친 총예산</b>이다. grace 30초에 preStop sleep 25초를 쓰면 SIGTERM 뒤엔 <b>5초</b>밖에 안 남는다. preStop 을 길게 잡을 거면 grace 도 같이 늘려야 앱이 SIGTERM 후 마무리할 시간이 확보된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>왜 하필 nginx 로 실습했어요? 우리 앱도 곱게 죽나요?</summary>
+<div class="a"><p>nginx 는 SIGTERM 을 <b>잘 처리</b>(연결 마무리 후 종료)하도록 만들어져 있어 관찰이 깔끔하다. 여러분 앱은 <b>직접 SIGTERM 핸들러를 넣어야</b> 곱게 죽는다 — 안 넣으면 grace 끝에 SIGKILL 로 끊긴다(Q3). 실습의 nginx 는 "잘 만든 앱은 이렇게 종료된다"의 본보기다.</p></div>
+</details>
+
+<details class="faq">
+<summary>SIGTERM 이 컨테이너의 "PID 1"에 간다는 게 무슨 뜻이에요?</summary>
+<div class="a"><p>컨테이너 안에서 entrypoint 로 뜬 <b>맨 처음 프로세스</b>가 PID 1 이고, SIGTERM 은 여기로 간다. 문제는 쉘 스크립트로 앱을 띄우면 <b>쉘이 PID 1</b> 이 되어 SIGTERM 을 자식 앱에 <b>전달 안 하는</b> 경우가 흔하다는 것. 이때 앱은 신호를 못 받아 grace 끝에 SIGKILL 된다. <code>exec</code> 로 앱을 띄우거나 init(tini) 을 쓰면 앱이 PID 1 이 되어 신호를 제대로 받는다.</p></div>
+</details>
+
+<details class="faq">
+<summary>postStart 훅은 언제 써요? preStop 이랑 짝인가요?</summary>
+<div class="a"><p>대칭이지만 다르다. <b>postStart</b> 는 컨테이너 <b>시작 직후</b> 실행되는 훅으로, entrypoint 와 <b>실행 순서가 보장되지 않는다</b>(거의 동시에 뜬다). 그래서 "반드시 앱 뜨기 전에 뭘 해야 한다"는 postStart 로 보장할 수 없다 — 그건 <b>0004</b> 의 startupProbe/initContainer 몫이다. preStop(종료 쪽)은 블로킹이라 순서가 확실한 반면, postStart(시작 쪽)는 그렇지 않다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>--grace-period=0 --force</code> 는 언제 써도 되나요?</summary>
+<div class="a"><p>노드가 완전히 죽어 kubelet 이 응답을 안 해 Pod 가 <b>Terminating 에 무한정 걸린</b> 예외 상황 정도다. 이건 preStop·SIGTERM 을 다 건너뛰고 API 오브젝트만 지우므로 in-flight 요청 유실, StatefulSet 의 경우 <b>같은 Pod 가 두 노드에서 도는 split-brain</b> 위험이 있다(warn 참고). 평소 배포·재시작엔 절대 습관화하지 말 것.</p></div>
+</details>
+
+<details class="faq">
+<summary>preStop sleep 없이도 요청 유실을 막을 순 없나요?</summary>
+<div class="a"><p>앱이 SIGTERM 을 받고도 <b>바로 끊지 말고 잠깐 더 요청을 받다가</b> 종료하도록 짜면 비슷한 효과가 난다(앱 레벨 드레인). 하지만 앱을 못 고치거나 여러 언어·프레임워크가 섞였을 때, preStop sleep 은 <b>앱과 무관하게</b> 일괄로 문제를 덮는 가장 단순한 방패다. 근본은 EndpointSlice 제거(<b>0003</b>)·kube-proxy 갱신(<b>0013</b>)의 전파 지연이라, 그 지연을 sleep 으로 흡수하는 것이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Job/CronJob 이나 데몬 같은 앱도 이 시퀀스가 똑같이 적용되나요?</summary>
+<div class="a"><p>Pod 로 도는 모든 워크로드에 <b>같은 종료 시퀀스</b>가 적용된다 — preStop→SIGTERM→grace→SIGKILL 은 컨트롤러 종류와 무관한 <b>Pod 레벨</b> 메커니즘이다. 다만 무엇을 "마무리"해야 하는지가 다를 뿐(웹은 in-flight 요청, 배치는 진행 중 작업 저장). Service 뒤에 없는 Job 은 2절 (a)네트워크 갈래가 사실상 무의미하고 (b)프로세스 갈래만 의미 있다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination">공식 문서: Pod Lifecycle — Termination of Pods</a> —
+삭제 시퀀스(deletionTimestamp·grace period·SIGTERM·SIGKILL)의 원전.
+<a href="https://kubernetes.io/docs/concepts/containers/container-lifecycle-hooks/">Container Lifecycle Hooks</a> 에서 preStop/postStart 훅을,
+<a href="https://kubernetes.io/docs/tasks/run-application/configure-pod-container/attach-handler-lifecycle-event/">Attach Handlers to Container Lifecycle Events</a> 에서 훅 문법을 확인할 수 있다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "PodDisruptionBudget 은 이 종료랑 어떻게 엮이나?", "노드 drain 할 때 종료 순서는?",
+"SIGTERM 핸들러를 Go/Node/Python 에서 어떻게 짜나?" — 전부 CKAD 로 가는 좋은 다음 재료다.
+</div>
+
+<nav class="nav">
+  <a href="0023-pod-lifecycle-states.html">← 0023 Pod 생명주기</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

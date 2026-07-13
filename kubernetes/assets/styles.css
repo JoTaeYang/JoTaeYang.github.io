@@ -1,0 +1,374 @@
+/* ============================================================
+   Kubernetes 아키텍처 코스 — 공유 스타일시트
+   모든 레슨/레퍼런스가 이 파일을 링크한다. 한 권의 책처럼 보이도록.
+   Tufte 스타일: 넉넉한 여백, 차분한 색, 읽기 좋은 본문.
+   ============================================================ */
+
+:root {
+  --bg:        #fdfcf8;
+  --ink:       #1a1a17;
+  --muted:     #6b6a63;
+  --faint:     #f2efe6;
+  --rule:      #e0dccf;
+  --accent:    #9a3412;   /* 벽돌색 — 강조, 링크 */
+  --accent-2:  #1d4ed8;   /* 파랑 — control plane */
+  --good:      #15803d;
+  --bad:       #b91c1c;
+  --warn:      #a16207;
+  --code-bg:   #2b2b29;
+  --code-ink:  #f4f1e8;
+  --maxw:      46rem;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia,
+           "Apple SD Gothic Neo", "Pretendard", serif;
+  --sans:  -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Apple SD Gothic Neo",
+           "Pretendard", "Segoe UI", sans-serif;
+  --mono:  "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:      #16161a;
+    --ink:     #e7e5df;
+    --muted:   #9b988f;
+    --faint:   #20202a;
+    --rule:    #34343f;
+    --accent:  #f0a07c;
+    --accent-2:#93b4ff;
+    --good:    #6ee7a0;
+    --bad:     #f1a1a1;
+    --warn:    #e9c46a;
+    --code-bg: #0e0e12;
+    --code-ink:#e7e5df;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 19px;
+  line-height: 1.62;
+  margin: 0;
+  padding: 0 1.25rem 6rem;
+}
+
+.wrap { max-width: var(--maxw); margin: 0 auto; }
+
+/* ---------- 헤더 ---------- */
+.kicker {
+  font-family: var(--sans);
+  font-size: .72rem;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 3rem 0 .4rem;
+}
+h1 {
+  font-weight: 600;
+  font-size: 2.1rem;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  margin: 0 0 .5rem;
+}
+.subtitle { color: var(--muted); font-style: italic; margin: 0 0 1.2rem; }
+
+h2 {
+  font-weight: 600;
+  font-size: 1.4rem;
+  margin: 2.6rem 0 .6rem;
+  padding-bottom: .25rem;
+  border-bottom: 1px solid var(--rule);
+}
+h3 { font-weight: 600; font-size: 1.12rem; margin: 1.8rem 0 .4rem; }
+
+p { margin: .8rem 0; }
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+a:hover { border-bottom-color: var(--accent); }
+
+strong { font-weight: 600; }
+em { font-style: italic; }
+
+ul, ol { padding-left: 1.3rem; }
+li { margin: .35rem 0; }
+
+/* ---------- 본문 강조 박스들 ---------- */
+
+/* 이번 레슨의 단 하나의 성취 */
+.win {
+  font-family: var(--sans);
+  background: color-mix(in srgb, var(--good) 12%, var(--bg));
+  border-left: 3px solid var(--good);
+  border-radius: 0 6px 6px 0;
+  padding: .9rem 1.1rem;
+  margin: 1.4rem 0;
+  font-size: .95rem;
+}
+.win b { color: var(--good); }
+
+/* "아하" 순간 — 직관 */
+.aha {
+  background: var(--faint);
+  border-radius: 8px;
+  padding: 1rem 1.2rem;
+  margin: 1.4rem 0;
+}
+.aha .label {
+  font-family: var(--sans);
+  font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); display: block; margin-bottom: .3rem;
+}
+
+/* 부가 메모 / 곁주 */
+.note {
+  font-family: var(--sans);
+  font-size: .86rem;
+  color: var(--muted);
+  border-left: 2px solid var(--rule);
+  padding-left: .9rem;
+  margin: 1.1rem 0;
+}
+
+/* 주의 */
+.warn {
+  font-family: var(--sans);
+  font-size: .9rem;
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg));
+  border-left: 3px solid var(--warn);
+  border-radius: 0 6px 6px 0;
+  padding: .8rem 1rem;
+  margin: 1.2rem 0;
+}
+
+/* ---------- 터미널 / 명령 ---------- */
+.cluster {
+  background: var(--code-bg);
+  color: var(--code-ink);
+  font-family: var(--mono);
+  font-size: .82rem;
+  line-height: 1.5;
+  border-radius: 8px;
+  padding: .9rem 1.05rem;
+  margin: 1.1rem 0;
+  overflow-x: auto;
+}
+.cluster .ctx {
+  display: inline-block;
+  font-size: .68rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #b8b4a6;
+  border: 1px solid #4a4a45;
+  border-radius: 4px;
+  padding: .05rem .4rem;
+  margin-bottom: .6rem;
+}
+.cluster .prompt { color: #7fd1b9; }       /* $ */
+.cluster .cmd    { color: #f4f1e8; }
+.cluster .flag   { color: #e9c46a; }
+.cluster .out    { color: #b8b4a6; display: block; white-space: pre; }
+.cluster .hl     { color: #7fb2ff; font-weight: 600; }
+.cluster .hl-cp  { color: #7fb2ff; font-weight: 600; }  /* control plane */
+.cluster .hl-wk  { color: #7fd1b9; font-weight: 600; }  /* worker */
+
+code {
+  font-family: var(--mono);
+  font-size: .86em;
+  background: var(--faint);
+  padding: .08em .35em;
+  border-radius: 4px;
+}
+.cluster code { background: none; padding: 0; }
+
+/* ---------- 다이어그램 (간단한 박스) ---------- */
+.diagram {
+  font-family: var(--sans);
+  margin: 1.6rem 0;
+  text-align: center;
+}
+.box {
+  display: inline-block;
+  border: 1.5px solid var(--rule);
+  border-radius: 8px;
+  padding: .7rem 1rem;
+  margin: .35rem;
+  background: var(--bg);
+  font-size: .85rem;
+  vertical-align: top;
+}
+.box.cp { border-color: var(--accent-2); }
+.box.wk { border-color: var(--good); }
+.box .t { font-weight: 600; display: block; }
+.box .d { color: var(--muted); font-size: .78rem; }
+.arrow { color: var(--muted); font-size: 1.2rem; margin: 0 .2rem; }
+
+/* ---------- 1차 자료 추천 ---------- */
+.source {
+  font-family: var(--sans);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: .9rem 1.1rem;
+  margin: 1.6rem 0;
+  font-size: .9rem;
+}
+.source .label {
+  font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--muted); display: block; margin-bottom: .3rem;
+}
+
+/* ---------- 선생님에게 물어보기 ---------- */
+.ask {
+  font-family: var(--sans);
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  border-radius: 8px;
+  padding: .9rem 1.1rem;
+  margin: 2rem 0;
+  font-size: .9rem;
+}
+.ask b { color: var(--accent); }
+
+/* ---------- 초보자 FAQ (native <details>, JS 불필요) ---------- */
+details.faq {
+  font-family: var(--sans);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: .1rem .3rem;
+  margin: .5rem 0;
+  background: var(--bg);
+  font-size: .9rem;
+}
+details.faq + details.faq { margin-top: .4rem; }
+details.faq > summary {
+  cursor: pointer;
+  padding: .6rem .8rem;
+  font-weight: 600;
+  list-style: none;
+  color: var(--ink);
+}
+details.faq > summary::-webkit-details-marker { display: none; }
+details.faq > summary::before {
+  content: "▸";
+  color: var(--accent);
+  margin-right: .5rem;
+  display: inline-block;
+  transition: transform .12s;
+}
+details.faq[open] > summary::before { transform: rotate(90deg); }
+details.faq[open] > summary { border-bottom: 1px dashed var(--rule); }
+details.faq .a {
+  padding: .7rem .8rem .8rem 1.75rem;
+  color: var(--ink);
+}
+details.faq .a p { margin: .4rem 0; }
+
+/* ---------- 퀴즈 (assets/quiz.js 와 함께) ---------- */
+.quiz {
+  font-family: var(--sans);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 1.1rem 1.2rem;
+  margin: 1.6rem 0;
+  background: var(--bg);
+}
+.quiz .q { font-weight: 600; margin: 0 0 .8rem; font-size: .98rem; }
+.quiz .opts { display: flex; flex-direction: column; gap: .5rem; }
+.quiz button.opt {
+  font-family: var(--sans);
+  font-size: .9rem;
+  text-align: left;
+  background: var(--faint);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: .55rem .8rem;
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.quiz button.opt:hover:not(:disabled) { border-color: var(--accent); }
+.quiz button.opt:disabled { cursor: default; opacity: .9; }
+.quiz button.opt.correct { background: color-mix(in srgb, var(--good) 22%, var(--bg)); border-color: var(--good); }
+.quiz button.opt.wrong   { background: color-mix(in srgb, var(--bad) 18%, var(--bg)); border-color: var(--bad); }
+.quiz .explain {
+  display: none;
+  margin-top: .9rem;
+  padding-top: .8rem;
+  border-top: 1px dashed var(--rule);
+  font-size: .88rem;
+  color: var(--ink);
+}
+.quiz .explain.show { display: block; }
+.quiz .verdict { font-weight: 600; }
+.quiz .verdict.ok  { color: var(--good); }
+.quiz .verdict.no  { color: var(--bad); }
+
+/* ---------- 레슨 간 이동 ---------- */
+.nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 3rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--sans);
+  font-size: .85rem;
+}
+.nav a { color: var(--muted); border: none; }
+.nav a:hover { color: var(--accent); }
+
+.tag {
+  font-family: var(--sans);
+  font-size: .68rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: .1rem .55rem;
+}
+
+hr { border: none; border-top: 1px solid var(--rule); margin: 2rem 0; }
+
+/* ---------- 비교 표 ---------- */
+table.cmp {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.1rem 0;
+  font-size: .92rem;
+}
+table.cmp th,
+table.cmp td {
+  text-align: left;
+  padding: .5rem .7rem;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+table.cmp th {
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: .82rem;
+  letter-spacing: .02em;
+  color: var(--muted);
+  border-bottom: 2px solid var(--rule);
+}
+table.cmp tr:last-child td { border-bottom: none; }
+
+.muted { color: var(--muted); }
+
+/* ---------- 인쇄 ---------- */
+@media print {
+  :root { --bg: #fff; --ink: #000; }
+  body { font-size: 11pt; padding: 0; }
+  .cluster { background: #f4f1e8; color: #000; border: 1px solid #ccc; }
+  .cluster .out, .cluster .ctx { color: #555; }
+  .quiz button.opt { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .nav, .ask { display: none; }
+  a { color: #000; border: none; }
+}
+
+@media (max-width: 480px) {
+  body { font-size: 17px; }
+  h1 { font-size: 1.7rem; }
+}

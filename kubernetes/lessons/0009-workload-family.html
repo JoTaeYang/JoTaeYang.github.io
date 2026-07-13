@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0009 — 워크로드 4형제: 언제 Deployment 가 아닌가</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0009 <span class="tag">Level 1 · 실습</span></p>
+<h1>워크로드 4형제: 언제 Deployment 가 아닌가</h1>
+<p class="subtitle">Deployment 는 "똑같고, 서로 바꿔도 되고, 영원히 도는 복제본"을 가정한다. 그 가정이 깨지는 네 지점에 각각 다른 워크로드가 산다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> Job 이 <b>Completed</b> 로 <em>끝나는</em> 것(재시작이 아니라)과,
+StatefulSet 의 Pod 가 <code>web-0, web-1</code> 처럼 <b>이름을 갖고 순서대로</b> 태어나
+지워도 같은 이름으로 되살아나는 것을 관찰한다. 0002 의 "랜덤 해시 Pod"와 정반대다.
+</div>
+
+<h2>1. 프레임 — Deployment 의 세 가정, 그리고 그걸 깨는 형제들</h2>
+
+<p>Deployment 를 고를 때 우리는 은연중에 세 가지를 가정한다. 다른 워크로드는 이 중 하나씩을 부순다.</p>
+
+<table class="cmp">
+<tr><th>워크로드</th><th>깨는 가정</th><th>한 줄 정의</th><th>실제 쓰임</th></tr>
+<tr>
+  <td><b>Deployment</b></td>
+  <td>— (기준)</td>
+  <td>똑같은 stateless 복제본 N 개를 영원히 유지</td>
+  <td>웹서버, API 등 대부분의 stateless 앱</td>
+</tr>
+<tr>
+  <td><b>StatefulSet</b></td>
+  <td>"서로 바꿔도 된다"</td>
+  <td>안정된 <b>이름·순서·스토리지</b>를 가진 복제본 (<code>web-0</code>, <code>web-1</code>…)</td>
+  <td>DB, Kafka 등 각 인스턴스가 고유 신원을 갖는 것</td>
+</tr>
+<tr>
+  <td><b>DaemonSet</b></td>
+  <td>"N 개를 아무 데나"</td>
+  <td><b>노드마다 정확히 하나</b> (replicas 개념이 없음)</td>
+  <td>로그 수집기, 모니터링 에이전트, CNI</td>
+</tr>
+<tr>
+  <td><b>Job</b></td>
+  <td>"영원히 돈다"</td>
+  <td>끝날 때까지 실행 후 <b>Completed</b> — 성공하면 재시작 안 함</td>
+  <td>배치 작업, 마이그레이션, 백업</td>
+</tr>
+<tr>
+  <td><b>CronJob</b></td>
+  <td>"영원히 돈다"</td>
+  <td>일정에 맞춰 <b>Job 을 찍어내는</b> 틀 (cron 문법)</td>
+  <td>야간 백업, 주기 리포트</td>
+</tr>
+</table>
+
+<div class="aha">
+<span class="label">아하</span>
+"어떤 워크로드를 쓰지?"는 <b>"Deployment 의 어떤 가정이 여기서 안 맞나?"</b> 한 질문으로 풀린다.
+바꿔 써도 되면 Deployment, 신원이 필요하면 StatefulSet, 노드마다 하나면 DaemonSet,
+언젠가 끝나야 하면 Job(주기적이면 CronJob). 다섯을 외우는 게 아니라 <b>가정 세 개</b>를 기억한다.
+</div>
+
+<h2>2. 실습 — 가장 다른 둘을 직접 본다</h2>
+
+<div class="note">kind 클러스터 <code>mastery</code> 이어서, 실습 namespace <code>lab</code> 에서 (없으면 <code>kubectl create namespace lab &amp;&amp; kubectl config set-context --current --namespace=lab</code>).</div>
+
+<p><b>추적 1 — Job 은 끝난다.</b> Deployment 의 Pod 는 프로세스가 끝나면 "죽었다"며 재시작되지만(0004),
+Job 의 Pod 는 끝나는 게 <em>목표</em>다. <code>pi.yaml</code>:</p>
+
+<div class="cluster"><span class="ctx">pi.yaml</span>
+<span class="out">apiVersion: batch/v1        <span class="hl"># Deployment 와 다른 API 그룹: batch</span>
+kind: Job
+metadata:
+  name: pi
+spec:
+  backoffLimit: 4            <span class="hl"># 실패 시 최대 4번까지 재시도</span>
+  template:
+    spec:
+      restartPolicy: Never   <span class="hl"># Job 은 Always 를 못 쓴다</span>
+      containers:
+      - name: pi
+        image: perl:5.34
+        command: ["perl", "-Mbignum=bpi", "-wle", "print bpi(200)"]</span>
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f pi.yaml && kubectl get pod -l job-name=pi -w</span>
+<span class="out">NAME       READY   STATUS      RESTARTS
+pi-abc12   0/1     ContainerCreating   0
+pi-abc12   1/1     Running     0
+pi-abc12   0/1     <span class="hl">Completed</span>    0     ← 끝났고, 재시작하지 않는다 (RESTARTS 0)</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get job pi</span>
+<span class="out">NAME   STATUS      COMPLETIONS   DURATION
+pi     <span class="hl">Complete</span>    1/1           7s</span>
+<span class="prompt">$</span> <span class="cmd">kubectl logs -l job-name=pi | head -c 40</span>
+<span class="out">3.14159265358979323846264338327950288...</span>
+</div>
+
+<p><code>Completed</code> 는 0006 에서 본 <code>CrashLoopBackOff</code> 의 정반대다 — 같은 "종료"라도
+Deployment 에겐 장애, Job 에겐 성공이다. 그래서 Job 은 <code>restartPolicy: Always</code> 를
+아예 금지한다(영원히 돌 거면 Job 이 아니니까).</p>
+
+<p><b>추적 2 — StatefulSet 은 이름을 갖는다.</b> 0002 에서 Deployment Pod 들은
+<code>web-7c5ddbdf54-x9k2p</code> 같은 랜덤 해시로 태어났다. StatefulSet 은 정반대다. <code>web-sts.yaml</code>:</p>
+
+<div class="cluster"><span class="ctx">web-sts.yaml</span>
+<span class="out">apiVersion: v1
+kind: Service            <span class="hl"># headless service (clusterIP: None) — 0003 의 변형</span>
+metadata:
+  name: web
+spec:
+  clusterIP: None
+  selector: { app: web }
+  ports: [{ port: 80 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: web
+spec:
+  serviceName: web
+  replicas: 3
+  selector: { matchLabels: { app: web } }
+  template:
+    metadata: { labels: { app: web } }
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27</span>
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f web-sts.yaml && kubectl get pod -l app=web -w</span>
+<span class="out">web-0   0/1   ContainerCreating
+web-0   1/1   Running        ← 0 이 Ready 가 되어야
+web-1   0/1   Pending
+web-1   1/1   Running        ← 그 다음 1 이 시작된다 (순서 보장)
+web-2   1/1   Running</span>
+<span class="prompt">$</span> <span class="cmd">kubectl delete pod web-1</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pod -l app=web</span>
+<span class="out">web-0   1/1   Running
+web-1   1/1   Running    ← 랜덤 이름이 아니라 <span class="hl">똑같은 web-1</span> 로 되살아났다
+web-2   1/1   Running</span>
+</div>
+
+<div class="warn">
+<b>0002 와 비교하라.</b> Deployment 에서 Pod 를 지우면 <em>다른</em> 랜덤 이름의 Pod 가 대신 떴다
+(누가 죽든 상관없으니까). StatefulSet 에서는 <code>web-1</code> 이 죽으면 <b>정확히 web-1</b> 이 돌아온다 —
+DB 클러스터에서 "1번 노드"의 정체성과 그에 붙은 디스크(PVC)가 유지돼야 하기 때문이다.
+스토리지 연결(PV/PVC)은 곧 이어질 스토리지 레슨(0011)에서 다룬다.
+</div>
+
+<p><b>DaemonSet 과 CronJob 은 개념으로.</b> kind 는 기본 단일 노드라 DaemonSet 이 Pod 1 개만
+띄워 극적이지 않다 — "노드마다 하나"라는 정의만 잡고 넘어간다. CronJob 은 위 Job 에
+<code>schedule: "*/1 * * * *"</code> 를 감싼 것뿐이라, 1 분마다 <code>pi</code> 같은 Job 이 새로 찍히는 틀이다.
+과투자 금지: 이 둘은 KCNA 에선 어휘 수준, CKAD 에서 실습으로 다시 만난다.</p>
+
+<p>정리: <code>kubectl delete ns lab</code> — Job, StatefulSet, Service 까지 한 번에.</p>
+
+<h2>3. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. 매일 새벽 3 시에 DB 를 백업하는 스크립트를 돌려야 한다. 알맞은 워크로드는?</p>
+  <div class="opts">
+    <button class="opt">Deployment — replicas 1 로 두고 스크립트가 시간을 재게 한다</button>
+    <button class="opt" data-correct="true">CronJob — schedule 에 cron 식을 넣으면 매번 Job 을 찍어낸다</button>
+    <button class="opt">DaemonSet — 노드마다 하나씩 백업이 돌게 한다</button>
+  </div>
+  <div class="explain">"언젠가 끝나야 하고(=Job) + 주기적(=schedule)" → CronJob. Deployment 로 하면 스크립트가 끝나는 순간 "죽었다"며 재시작되어 백업이 폭주한다 — Deployment 의 "영원히 돈다" 가정이 안 맞는 자리다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. StatefulSet 의 <code>web-1</code> Pod 를 지웠다. 무슨 일이 일어나나?</p>
+  <div class="opts">
+    <button class="opt">랜덤 접미사를 단 새 Pod 가 대신 뜬다 (Deployment 와 동일)</button>
+    <button class="opt" data-correct="true">같은 이름 <code>web-1</code> 로 다시 생성된다 — 신원이 이름에 묶여 있다</button>
+    <button class="opt">web-2 가 web-1 로 번호를 당겨받아 빈 자리를 메운다</button>
+  </div>
+  <div class="explain">StatefulSet 의 핵심은 <b>안정된 신원</b>. 이름(그리고 붙은 PVC)이 인덱스에 고정돼 있어, 죽어도 같은 이름으로 돌아온다. 0002 의 Deployment(교체 가능한 랜덤 Pod)와 정확히 반대되는 성질이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0006 복습) Job 의 Pod 가 성공적으로 끝나 <code>Completed</code> 다. 이건 어떤 상태와 헷갈리면 안 되나?</p>
+  <div class="opts">
+    <button class="opt" data-correct="true"><code>CrashLoopBackOff</code> — 둘 다 "종료"지만 하나는 성공, 하나는 반복 실패다</button>
+    <button class="opt"><code>Pending</code> — 둘 다 컨테이너가 안 도는 상태다</button>
+    <button class="opt"><code>OOMKilled</code> — 둘 다 커널이 개입한 결과다</button>
+  </div>
+  <div class="explain">간격 반복: <code>Completed</code>(Job 의 목표)와 <code>CrashLoopBackOff</code>(Deployment 의 장애)는 같은 "프로세스 종료"에서 갈린다. 워크로드 종류가 "종료"의 의미를 바꾼다 — restartPolicy 가 그 차이의 스위치다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2 를 맞히면 워크로드 4형제 ✅ — 다음은 <b>외부 노출 3단</b>
+(NodePort → LoadBalancer → Ingress). 0003 의 ClusterIP 위에 "클러스터 밖에서 접속"을 얹는다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">실습하다 떠오르는 "어? 이건 왜 이러지?"를 미리 모았다. 궁금한 것만 펼쳐 보면 된다 — 안 궁금하면 접힌 채 넘어가도 된다.</p>
+
+<details class="faq">
+<summary>워크로드가 5 개나 되는데 다 외워야 하나요?</summary>
+<div class="a"><p>외우는 건 Deployment 의 <b>가정 3개</b>(교체 가능·N개·영원히)뿐이다. 나머지 넷은 그 가정을 하나씩 깬 특수 케이스라 "이 가정이 안 맞네 → 저거"로 유도된다. 암기 5개가 아니라 분기 1개다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Job 이 성공했는데 왜 Pod 가 안 사라지고 <code>Completed</code> 로 남아 있어요?</summary>
+<div class="a"><p>로그를 나중에 볼 수 있게 일부러 남긴다. 정리하려면 <code>kubectl delete job pi</code>(Pod 도 함께 사라짐), 또는 Job spec 에 <code>ttlSecondsAfterFinished</code> 를 넣으면 완료 후 자동 삭제된다. CKAD 단골 옵션이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Job 에서 <code>restartPolicy: Always</code> 를 쓰면 왜 안 되나요?</summary>
+<div class="a"><p>Always 는 "끝나도 계속 다시 켜라"는 뜻이라, 언젠가 끝나야 하는 Job 의 목적과 정면 충돌한다. 그래서 API 가 아예 거부한다 — Job 은 <code>Never</code> 또는 <code>OnFailure</code>만 허용한다. 실패 재시도는 <code>restartPolicy</code> 가 아니라 <code>backoffLimit</code> 이 담당한다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>backoffLimit</code> 이랑 <code>restartPolicy: OnFailure</code> 는 뭐가 달라요?</summary>
+<div class="a"><p>둘 다 "실패하면 재시도"지만 층이 다르다. <code>OnFailure</code> 는 <em>같은 Pod 안에서</em> 컨테이너를 재시작하고, <code>backoffLimit</code> 은 Job 이 <em>새 Pod 를 몇 번까지</em> 만들지의 상한이다. backoffLimit 을 넘기면 Job 이 <code>Failed</code> 로 확정된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>StatefulSet 의 Pod 가 <b>순서대로</b> 뜨는 게 왜 중요해요?</summary>
+<div class="a"><p>DB 클러스터 같은 데선 0 번(주로 primary)이 먼저 준비돼야 1 번, 2 번이 거기 붙어 복제를 시작할 수 있다. 아무 순서로나 뜨면 부팅이 꼬인다. 그래서 <code>web-0</code> 이 Ready 가 된 뒤에야 <code>web-1</code> 이 시작된다. 삭제는 역순(2→1→0)이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>headless service(<code>clusterIP: None</code>)는 뭐예요? 0003 의 Service 랑 달라요?</summary>
+<div class="a"><p>0003 의 보통 Service 는 하나의 가상 IP(ClusterIP) 뒤로 Pod 들을 숨겼다. headless 는 그 대표 IP 를 <b>없애고</b>(None), 대신 각 Pod 에 <code>web-0.web</code>, <code>web-1.web</code> 같은 고유 DNS 이름을 준다. "아무나 하나"가 아니라 "특정 인스턴스"를 직접 부르기 위한 것 — StatefulSet 의 신원과 짝을 이룬다.</p></div>
+</details>
+
+<details class="faq">
+<summary>DaemonSet 은 replicas 를 몇으로 두나요?</summary>
+<div class="a"><p>둘 수 없다 — replicas 필드 자체가 없다. "노드 수 = Pod 수"가 규칙이라, 노드를 새로 추가하면 거기에 자동으로 하나 뜨고, 노드를 빼면 함께 사라진다. 그래서 로그 수집기·모니터링 에이전트처럼 "모든 노드에 하나씩" 있어야 하는 것에 쓴다.</p></div>
+</details>
+
+<details class="faq">
+<summary>StatefulSet 이면 스토리지(디스크)도 자동으로 붙나요?</summary>
+<div class="a"><p>이번 실습은 신원(이름·순서)만 봤고 디스크는 안 붙였다. StatefulSet 에 <code>volumeClaimTemplates</code> 를 더하면 Pod 마다 <b>전용 PVC</b>가 생기고, <code>web-1</code> 이 죽었다 살아나도 같은 디스크를 다시 문다. 이 PV/PVC 가 곧 이어질 스토리지 레슨(0011) 주제다 — 그 사이에 외부 노출(0010)이 먼저 온다.</p></div>
+</details>
+
+<details class="faq">
+<summary>CronJob 의 <code>schedule: "*/1 * * * *"</code> 는 어떻게 읽어요?</summary>
+<div class="a"><p>표준 cron 5칸: 분·시·일·월·요일. <code>*/1 * * * *</code> = "매 1분마다". 예: <code>0 3 * * *</code> = 매일 새벽 3시, <code>0 0 * * 0</code> = 매주 일요일 자정. crontab.guru 같은 사이트로 확인하는 습관을 들이면 실수를 줄인다.</p></div>
+</details>
+
+<details class="faq">
+<summary>그냥 전부 Deployment 로 하면 안 되나요? 굳이 나눠야 해요?</summary>
+<div class="a"><p>가정이 맞으면 Deployment 가 제일 편하다 — 대부분의 stateless 앱이 그렇다. 문제는 가정이 틀린 자리에 Deployment 를 쓰면 조용히 망가진다는 것: 배치 작업이 무한 재시작되거나, DB Pod 가 매번 새 이름·새 디스크로 태어나 데이터를 잃는다. "맞는 도구"의 값어치는 장애 났을 때 드러난다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/workloads/controllers/">공식 문서: Workloads &amp; Controllers</a> —
+<a href="https://kubernetes.io/docs/concepts/workloads/controllers/job/">Job</a>,
+<a href="https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/">StatefulSet</a> 절이 오늘의 원전.
+DaemonSet/CronJob 은 같은 목록에서 어휘만 확인하고 넘어간다 (KCNA 비중 낮음).
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "Job 을 병렬로 여러 개 돌리려면?(<code>parallelism</code>)",
+"StatefulSet 을 롤링 업데이트하면 순서가 어떻게 되나?", "CronJob 이 겹쳐 돌면?(<code>concurrencyPolicy</code>)" —
+전부 CKAD 로 이어지는 좋은 실이다.
+</div>
+
+<nav class="nav">
+  <a href="0008-rbac-hands-on.html">← 0008 RBAC 실습</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

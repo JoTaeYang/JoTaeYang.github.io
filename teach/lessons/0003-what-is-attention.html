@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 3 — 어텐션이란 무엇인가</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .attn-demo { border:1px solid var(--rule); border-radius:10px; padding:1.1rem 1.3rem; margin:1.4rem 0; background:#fff; font-size:0.95rem; }
+  .tok { display:inline-block; padding:0.15rem 0.5rem; margin:0.15rem 0.1rem; border-radius:6px; font-family:"SF Mono",Menlo,monospace; font-size:0.82rem; background:#f0f0ee; }
+  .tok.hot { background:#dcfce7; border:1px solid var(--good); font-weight:700; }
+  .tok.warm { background:#fef9c3; }
+  .tok.query { background:var(--accent-soft); border:1px solid var(--accent); color:var(--accent); font-weight:700; }
+  .bar { height:10px; background:linear-gradient(90deg,var(--good),#86efac); border-radius:5px; display:inline-block; vertical-align:middle; }
+</style>
+</head>
+<body>
+
+<p class="kicker">Lesson 03 · Phase 1 — The Workload · (개념의 뿌리)</p>
+<h1>어텐션이란 무엇인가</h1>
+<p class="subtitle">각 토큰이 다른 토큰들에게서 정보를, '관련도만큼' 끌어오는 장치. 이 코스에서 배우는 최적화 문제 대부분의 뿌리다.</p>
+
+<div class="callout key">
+  <span class="label">이번 레슨의 단 하나의 승리</span>
+  “<strong>모두가 과거 모두를 본다</strong>”는 어텐션의 성질을 직관적으로 이해하고, 이것이 왜
+  <a href="0002-decode-loop-and-kv-cache.html">KV 캐시</a>와 <a href="0001-why-inference-is-memory-bound.html">메모리 바운드</a>를
+  낳는지 한 줄로 연결한다.
+</div>
+
+<div class="callout">
+  <span class="label">읽는 순서 안내</span>
+  이 레슨은 <em>개념상 Lesson 2보다 아래</em>에 있다. Lesson 2·GQA를 먼저 배운 뒤 이 뿌리를 이해하는 건
+  일부러 그런 것 — 이미 아는 것에 뿌리를 대면 더 오래 기억에 남는다(interleaving).
+</div>
+
+<h2>어텐션이 푸는 문제</h2>
+<p>
+다음 단어를 예측하려면, 지금 토큰은 <strong>앞의 어떤 단어를 참고해야 하는지</strong> 알아야 한다.
+그런데 모든 앞 단어가 똑같이 중요하진 않다. 예를 보자:
+</p>
+
+<div class="attn-demo">
+  <p style="margin:0 0 0.7rem;">“그 <span class="tok hot">동물</span>은 <span class="tok">길</span>을 건너지 않았다, 너무 피곤했기 때문에. <span class="tok query">그것</span>은 쉬고 싶었다.”</p>
+  <p class="small" style="margin:0.3rem 0;"><span class="tok query">그것</span> 토큰이 각 과거 토큰에 주는 <strong>주목(attention) 가중치</strong>:</p>
+  <table style="width:100%; font-size:0.85rem;">
+    <tr><td style="width:70px;"><span class="tok hot">동물</span></td><td><span class="bar" style="width:70%"></span> 0.70</td></tr>
+    <tr><td><span class="tok warm">피곤</span></td><td><span class="bar" style="width:18%"></span> 0.18</td></tr>
+    <tr><td><span class="tok">길</span></td><td><span class="bar" style="width:8%"></span> 0.08</td></tr>
+    <tr><td class="small">기타…</td><td><span class="bar" style="width:4%"></span> 0.04</td></tr>
+  </table>
+  <p class="small" style="margin:0.6rem 0 0;">“그것”은 <strong>“동물”에 강하게 주목</strong>한다 — “길”이 아니라. 어텐션이 대명사의 지시 대상을 문맥에서 끌어온다.</p>
+</div>
+
+<p><strong>어텐션 = 각 토큰이 다른 토큰들에게서 정보를, “관련도만큼 가중치를 줘서” 끌어오는 장치.</strong></p>
+
+<h2>어떻게 작동하나 — 검색 한 번 (Q·K·V)</h2>
+<p>토큰 하나가 정보를 끌어오는 과정은 도서관 검색과 같다. 각 토큰은 세 벡터로 변신한다:</p>
+<table style="width:100%; border-collapse:collapse; margin:1rem 0; font-size:0.95rem;">
+  <tr style="border-bottom:1px solid var(--rule);"><td style="padding:0.5rem; width:110px;"><strong>Q</strong> Query</td><td style="padding:0.5rem;">“나는 지금 뭘 찾지?” — <span class="small">검색어</span></td></tr>
+  <tr style="border-bottom:1px solid var(--rule);"><td style="padding:0.5rem;"><strong>K</strong> Key</td><td style="padding:0.5rem;">“나는 뭐에 대한 토큰인지 광고판” — <span class="small">책의 색인/제목</span></td></tr>
+  <tr><td style="padding:0.5rem;"><strong>V</strong> Value</td><td style="padding:0.5rem;">“실제로 건네줄 내용물” — <span class="small">책의 내용</span></td></tr>
+</table>
+
+<ol>
+  <li><strong>Q 꺼내기</strong> — “그것”이 “내가 가리키는 명사가 뭐지?”라고 묻는다.</li>
+  <li><strong>Q · 모든 과거 K</strong> 내적 → 관련도 점수. “동물”의 K가 제일 잘 맞아 높은 점수.</li>
+  <li><strong>softmax</strong> 로 점수를 가중치(합=1)로 정규화 → 위 그림의 0.70 / 0.18 / …</li>
+  <li>그 가중치로 <strong>각 토큰의 V를 가중합</strong> → “그것”이 “동물”의 의미를 대부분 흡수한 새 벡터가 된다.</li>
+</ol>
+
+<p class="small">문장 안의 토큰들이 <em>서로</em> 이 짓을 하기 때문에 <strong>셀프 어텐션(self-attention)</strong>이라 부른다.
+그리고 이 일을 여러 <strong>헤드(head)</strong>가 각기 다른 관점(문법·주제·지시…)으로 병렬 수행한다 — <a href="../reference/glossary.html">GQA</a>는 그 헤드들의 K·V를 공유해 캐시를 줄인 것.</p>
+
+<h2>왜 혁명이었나</h2>
+<p>
+예전 방식(RNN)은 단어를 <strong>하나씩 순서대로</strong> 읽어, 멀리 떨어진 단어의 연결이 약하고 느렸다.
+어텐션은 <strong>모든 토큰이 모든 토큰을 한 번에</strong> 본다 → 먼 거리 관계(“그것↔동물”)를 잘 잡고,
+<strong>병렬 처리</strong>가 된다. 이것이 2017년 <em>“Attention Is All You Need”</em>의 <strong>트랜스포머</strong>이고,
+오늘날 모든 LLM의 뼈대다<sup class="cite">[1]</sup>.
+</p>
+
+<h2>우리 코스와의 연결 (이 레슨의 진짜 목적)</h2>
+<div class="callout key">
+  <span class="label">한 성질이 모든 걸 낳는다</span>
+  “새 토큰은 <strong>과거 모든 토큰의 K·V를 봐야 한다</strong>” — 이 한 성질에서:
+  <ul style="margin:0.5rem 0 0;">
+    <li>과거 K·V를 저장할 <strong>KV 캐시</strong>가 필요해지고 <span class="small">(Lesson 2)</span>,</li>
+    <li>문맥이 길수록 캐시가 커지고,</li>
+    <li><strong>GQA</strong>로 K·V를 줄이려 하고,</li>
+    <li>결국 추론이 <strong>메모리 바운드</strong>가 된다 <span class="small">(Lesson 1)</span>.</li>
+  </ul>
+</div>
+
+<div class="quiz" data-answer="2">
+  <div class="q">셀프 어텐션에서 각 토큰이 하는 일을 가장 잘 요약한 것은?</div>
+  <button class="opt">앞 토큰을 순서대로 하나씩만 읽어 넘긴다</button>
+  <button class="opt">자기 자신의 벡터만 보고 다음을 예측한다</button>
+  <button class="opt">과거 모든 토큰을 관련도만큼 가중해 정보를 끌어온다</button>
+  <button class="opt">모든 과거 토큰을 똑같은 비중으로 평균 낸다</button>
+  <div class="feedback"
+       data-correct="정확하다. Q·K로 관련도를 재고, 그 가중치로 V를 섞는다. 이 '모두가 모두를 본다'가 KV 캐시와 메모리 바운드의 뿌리."
+       data-wrong="다시 보자. 핵심은 '관련도만큼 가중치를 줘서' 과거 전체에서 정보를 끌어오는 것 — 순차도, 균등 평균도 아니다."></div>
+</div>
+
+<div class="callout">
+  <span class="label">스스로 확인 (retrieval practice)</span>
+  종이를 덮고: ⑴ Q·K·V 각각의 역할을 한 단어로? ⑵ 어텐션 가중치는 무엇을 무엇과 비교해서 나오나?
+  ⑶ 어텐션의 어떤 성질이 KV 캐시를 필요하게 만드나? &nbsp;+ <em>복습:</em> KV 캐시에 저장되는 두 가지는?(L2)
+</div>
+
+<h2>가장 먼저 읽을/볼 자료 (primary source)</h2>
+<p>
+Jay Alammar, <a href="https://jalammar.github.io/illustrated-transformer/"><em>The Illustrated Transformer</em></a> —
+어텐션을 그림으로 가장 잘 설명한 고전. 원 논문은
+Vaswani et al., <a href="https://arxiv.org/abs/1706.03762"><em>Attention Is All You Need</em></a> (2017).
+</p>
+
+<div class="ask">
+  🧑‍🏫 <strong>막히면 바로 물어보세요.</strong> “내적이 왜 유사도야?”, “softmax가 정확히 뭐야?”,
+  “Q·K·V 만드는 가중치는 어떻게 학습돼?”, “헤드가 왜 여러 관점을 봐?” — 무엇이든 그 자리에서.
+</div>
+
+<hr>
+<p class="refs"><strong>References</strong></p>
+<ol class="refs">
+  <li>[1] Vaswani et al., <a href="https://arxiv.org/abs/1706.03762">Attention Is All You Need</a>, 2017.</li>
+  <li>[2] Jay Alammar, <a href="https://jalammar.github.io/illustrated-transformer/">The Illustrated Transformer</a>.</li>
+</ol>
+
+<div class="lesson-nav">
+  <span><a href="0002-decode-loop-and-kv-cache.html">← Lesson 2 (KV 캐시)</a></span>
+  <span><a href="../index.html">🏠 Hub</a> · <a href="../reference/glossary.html">Glossary</a> · Next: 배칭 — 처리량 vs 메모리 (예정)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

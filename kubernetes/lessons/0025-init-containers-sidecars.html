@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0025 — Init 컨테이너 &amp; 네이티브 사이드카: 앞뒤로 붙는 컨테이너</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0025 <span class="tag">Fundamentals 심화</span></p>
+<h1>Init 컨테이너 &amp; 네이티브 사이드카 — 앱 앞뒤로 붙는 컨테이너</h1>
+<p class="subtitle"><b>0016</b> 메시가 Pod 에 몰래 넣던 그 사이드카의 <b>정체와 메커니즘</b>이 여기 있다. 앱보다 <b>먼저</b> 도는 것(init), 앱과 <b>나란히</b> 도는 것(sidecar) — 순서를 쿠버네티스가 어떻게 보장하는가.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> <b>0002</b> 에서 "한 Pod 에 여러 컨테이너"를 배웠고 <b>0016</b> 에서 메시가 사이드카를 자동 주입하는 걸 봤다.
+이제 그 아래 메커니즘 — <b>init 컨테이너</b>(앱 전에 순차 실행·완료 대기)와 <b>네이티브 사이드카</b>(1.29 stable, 앱 전에 뜨고 뒤에 종료) —
+를 손으로 만진다. 덤으로 <b>0009</b> 의 "사이드카 때문에 Job 이 Complete 못 하는" 고전 문제가 왜 네이티브 사이드카로 풀리는지 확실히 갈라 둔다.
+</div>
+
+<h2>1. Init 컨테이너 — 앱보다 "먼저, 순서대로, 끝까지"</h2>
+
+<p><b>Init 컨테이너</b>는 Pod 의 앱 컨테이너들이 시작되기 <b>전에</b> 실행되는 컨테이너다. 세 가지 성질이 전부다:</p>
+
+<table class="cmp">
+<tr><th>성질</th><th>뜻</th><th>왜 유용한가</th></tr>
+<tr><td><b>먼저</b></td><td>모든 앱 컨테이너보다 앞서 실행</td><td>앱이 뜨기 전에 판을 깔 수 있다</td></tr>
+<tr><td><b>순서대로(sequential)</b></td><td>init 이 여럿이면 <b>하나씩</b> 차례로 (병렬 아님)</td><td>1번이 끝나야 2번 — 단계적 준비</td></tr>
+<tr><td><b>끝까지(완료 대기)</b></td><td>init 이 <b>성공 종료(exit 0)</b> 해야 다음으로 넘어감</td><td>준비가 끝나기 전엔 앱을 안 띄운다</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — 앱은 판이 깔린 뒤에만 뜬다</span>
+init 컨테이너들이 <b>전부 순차로 성공</b>해야 비로소 앱 컨테이너들이 시작된다. 그전까지 Pod 는 <code>Init:0/1</code> 같은
+상태에 <b>멈춰</b> 있다. 그래서 "DB 가 준비될 때까지 대기", "설정 파일 다운로드", "DB 마이그레이션", "볼륨 파일 권한 세팅"
+같은 <b>선행 작업</b>을 앱 코드에 넣지 않고 init 으로 분리한다 — 앱 이미지는 앱만 하면 된다.
+</div>
+
+<p>대표 용도 두 갈래:</p>
+
+<table class="cmp">
+<tr><th>용도</th><th>예</th></tr>
+<tr><td><b>의존성 대기</b></td><td>DB/다른 Service 가 응답할 때까지 <code>until nslookup db; do sleep 2; done</code></td></tr>
+<tr><td><b>셋업</b></td><td>설정/시크릿 다운로드, 스키마 마이그레이션, emptyDir 볼륨에 파일 권한 부여</td></tr>
+</table>
+
+<div class="warn">
+<b>init 이 실패하면?</b> 앱은 <b>아예 안 뜬다.</b> init 컨테이너의 재시작은 Pod 의 <b>restartPolicy(<a href="0023-pod-lifecycle-states.html">0023</a>)</b> 를 따른다 —
+<code>Always</code>/<code>OnFailure</code> 면 init 이 성공할 때까지 계속 재시도(Pod 는 <code>Init:CrashLoopBackOff</code> 로 보임),
+<code>Never</code> 면 Pod 가 <code>Init:Error</code> 로 실패한다. 어느 쪽이든 <b>앱 컨테이너는 시작조차 안 된다</b> —
+그래서 "의존성 대기"를 init 에 넣으면 의존성이 준비될 때까지 앱이 절대 안 뜨는 안전한 게이트가 된다.
+</div>
+
+<h2>2. 실행 순서 — init 은 순차, 앱은 병렬</h2>
+
+<p>한 Pod 안에서 시간 축은 이렇게 흐른다:</p>
+
+<div class="aha">
+<span class="label">타임라인 한 줄</span>
+<b>init-1 → init-2 → … → (전부 exit 0) → 앱 컨테이너들 병렬 시작.</b>
+init 은 <b>하나씩 순서대로</b> 돌고 각자 성공 종료를 기다린다. 반면 앱 컨테이너(<code>containers:</code>)들은 서로 순서 보장이
+<b>없고</b> 준비되는 대로 <b>동시에</b> 뜬다. 그래서 앱들 사이에 "이게 먼저 떠야 한다"가 필요하면 일반 앱 컨테이너로는 보장이 안 된다 —
+이 빈틈이 다음 절의 <b>네이티브 사이드카</b>를 부른다.
+</div>
+
+<div class="note"><b>0002 와 이어짐:</b> 0002 에서 "한 Pod = 여러 컨테이너가 네트워크·볼륨 공유"를 배웠다.
+init 컨테이너도 같은 Pod 의 볼륨을 공유하므로, init 이 <code>emptyDir</code> 에 받아둔 설정 파일을 앱 컨테이너가 그대로 읽는 식의 <b>바통 넘기기</b>가 된다.</div>
+
+<h2>3. 네이티브 사이드카 — restartPolicy: Always 인 init 컨테이너</h2>
+
+<p>쿠버네티스 <b>1.28 베타 · 1.29 stable</b> 부터, <code>initContainers</code> 항목에 <b><code>restartPolicy: Always</code></b> 를 주면
+그 컨테이너는 <b>네이티브 사이드카</b>가 된다. 이름은 init 리스트에 있지만 동작은 다르다:</p>
+
+<div class="aha">
+<span class="label">아하 — init 자리에 있지만 안 끝난다</span>
+일반 init 은 "성공 종료해야 다음"이지만, <code>restartPolicy: Always</code> 인 init 은 <b>계속 돌게 두고</b>
+<b>Ready 가 되면 다음으로 넘어간다</b>. 그래서 이 컨테이너는 (1) 앱 컨테이너보다 <b>먼저 뜨고</b>,
+(2) 앱과 <b>나란히 계속 돌고</b>, (3) 앱이 끝난 <b>이후에 종료</b>된다. "앱 전에 up, 앱 후에 down" 이 보장된다.
+</div>
+
+<p>이게 왜 큰일이냐면, 옛날 방식 사이드카(그냥 <code>containers:</code> 에 컨테이너 하나 더 넣기)의 <b>3대 고질병</b>을 한 번에 고치기 때문이다:</p>
+
+<table class="cmp">
+<tr><th>옛 사이드카의 문제</th><th>왜 아팠나</th><th>네이티브 사이드카의 해결</th></tr>
+<tr><td><b>시작 순서</b></td><td>앱 컨테이너들은 병렬 시작 — 프록시가 앱보다 늦게 뜨면 앱 초기 요청이 샌다</td><td>init 자리라 <b>앱보다 먼저</b> 뜨고 Ready 후 앱 시작</td></tr>
+<tr><td><b>종료 순서</b></td><td>종료 때 프록시가 앱보다 먼저 죽으면 앱의 마지막 요청이 끊긴다</td><td>사이드카는 앱 <b>이후에</b> 종료</td></tr>
+<tr><td><b>Job 완료 차단</b></td><td>사이드카가 안 죽어 Job 의 main 이 끝나도 Pod 가 <b>Complete 안 됨</b></td><td>main 이 끝나면 사이드카도 <b>자동 종료</b> → Job 완료</td></tr>
+</table>
+
+<h2>4. 일반 사이드카 vs 네이티브 사이드카 (0016 메시와 대비)</h2>
+
+<p><b>0016</b> 에서 메시가 주입하던 Envoy 프록시가 바로 사이드카다. 그때는 대개 <b>일반</b> 멀티컨테이너 방식이었다 —
+같은 Pod 의 <code>containers:</code> 에 프록시를 하나 더 넣는. 두 방식을 나란히 놓으면 차이가 선명하다:</p>
+
+<table class="cmp">
+<tr><th></th><th>일반 사이드카 (containers:)</th><th>네이티브 사이드카 (initContainers + restartPolicy: Always)</th></tr>
+<tr><td><b>어디에 선언</b></td><td><code>spec.containers</code></td><td><code>spec.initContainers</code> + <code>restartPolicy: Always</code></td></tr>
+<tr><td><b>시작 순서</b></td><td>앱과 병렬 — <b>보장 없음</b></td><td>앱보다 <b>먼저</b> (init 단계)</td></tr>
+<tr><td><b>종료 순서</b></td><td>보장 없음</td><td>앱 <b>이후</b> 종료</td></tr>
+<tr><td><b>Job 에서</b></td><td>안 죽어 Job <b>Complete 차단</b></td><td>main 끝나면 종료 → <b>Job 완료</b></td></tr>
+<tr><td><b>버전</b></td><td>항상 됨</td><td>1.29+ (stable)</td></tr>
+</table>
+
+<div class="note"><b>0016 과 이어짐:</b> 0016 의 메시 사이드카는 "앱은 손 안 대고 옆에 프록시를 붙여 트래픽을 대신 처리"하는 패턴이었다.
+그 <b>패턴</b>은 그대로고, 네이티브 사이드카는 그 패턴을 <b>순서까지 안전하게</b> 만든 최신 메커니즘이다. 요즘 메시들이 네이티브 사이드카로 옮겨가는 이유가 이 표다.</div>
+
+<h2>5. 사이드카 패턴 3종</h2>
+
+<table class="cmp">
+<tr><th>패턴</th><th>사이드카가 하는 일</th></tr>
+<tr><td><b>로깅 수집</b></td><td>앱이 파일/볼륨에 쓴 로그를 사이드카가 읽어 중앙(Loki 등, <b>0014</b> 로그 기둥)으로 전송</td></tr>
+<tr><td><b>프록시(메시)</b></td><td><b>0016</b> 의 Envoy — 앱 대신 mTLS·재시도·트래픽 분할 처리</td></tr>
+<tr><td><b>설정 리로더</b></td><td>ConfigMap/Secret(<b>0005</b>) 변경을 감시해 공유 볼륨을 갱신하고 앱에 reload 신호</td></tr>
+</table>
+
+<h2>6. Job 에서 왜 네이티브 사이드카가 결정적인가 (0009)</h2>
+
+<p><b>0009</b> 에서 Job 은 "<b>main 컨테이너가 성공 종료하면 완료(Complete)</b>"라고 배웠다. 여기에 일반 사이드카를 붙이면 사고가 난다:</p>
+
+<div class="aha">
+<span class="label">고전 함정</span>
+Job 에 로깅/프록시 <b>일반 사이드카</b>를 붙이면, main 작업이 <code>exit 0</code> 로 끝나도 <b>사이드카는 계속 돌기 때문에</b>
+Pod 안에 살아있는 컨테이너가 남아 Job 이 <b>영원히 Complete 하지 못한다</b>. 사이드카는 "끝"이라는 개념이 없으니까.
+<b>네이티브 사이드카</b>는 이걸 정의로 해결한다 — <b>main(앱) 컨테이너가 끝나면 사이드카도 종료</b>된다. 그래서 Job 이 정상 완료된다.
+</div>
+
+<h2>7. Hands-on (a) — init 컨테이너로 서비스 대기 관찰 (kind <code>mastery</code>)</h2>
+
+<div class="note">kind 클러스터 <code>mastery</code> 이어서 사용. <b>0020</b> 처럼 <code>lab</code> namespace 에서 격리해 실습한다.
+init 이 성공할 때까지 앱이 안 뜨는 걸 <b>눈으로</b> 보는 게 목표다.</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl create namespace lab 2&gt;/dev/null; kubectl config set-context --current --namespace=lab</span>
+</div>
+
+<p><b>init 이 15초 기다리는 Pod.</b> <code>init-demo.yaml</code> — 앱은 nginx, init 은 그저 sleep 으로 "준비 대기"를 흉내 낸다:</p>
+
+<div class="cluster"><span class="ctx">init-demo.yaml</span>
+<span class="out">apiVersion: v1
+kind: Pod
+metadata:
+  name: init-demo
+spec:
+  initContainers:
+  - name: wait-a-bit
+    image: busybox:1.36
+    command: ['sh', '-c', 'echo waiting...; sleep 15; echo ready']   <span class="hl"># 앱 전에 15초 순차 실행</span>
+  containers:
+  - name: app
+    image: nginx:1.27          <span class="hl"># init 이 exit 0 해야 비로소 시작</span></span>
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f init-demo.yaml</span>
+<span class="out">pod/init-demo created</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pod init-demo -w</span>       <span class="hl"># -w = watch, 상태 전이를 실시간으로</span>
+<span class="out">NAME        READY   STATUS     RESTARTS   AGE
+init-demo   0/1     <span class="hl">Init:0/1</span>   0          2s    <span class="hl"># init 실행 중 — 앱은 아직 안 뜸</span>
+init-demo   0/1     <span class="hl">Init:0/1</span>   0          14s
+init-demo   0/1     PodInitializing   0   16s   <span class="hl"># init 끝, 앱 이미지 준비 중</span>
+init-demo   1/1     <span class="hl">Running</span>    0          18s   <span class="hl"># init 성공 → 앱 시작 (Ctrl+C 로 watch 종료)</span></span>
+</div>
+
+<p><b>init 의 로그는 <code>-c</code> 로 컨테이너를 지정</b>해서 본다 (앱 로그와 섞이지 않게):</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl logs init-demo -c wait-a-bit</span>   <span class="hl"># -c &lt;init-name&gt; 으로 init 컨테이너 로그</span>
+<span class="out">waiting...
+ready</span>
+</div>
+
+<div class="aha">
+<span class="label">직접 확인해 볼 것</span>
+init 의 <code>command</code> 를 <code>['sh','-c','exit 1']</code> 로 바꿔 다시 apply 해 보라. Pod 는 <code>Init:Error</code> →
+(기본 restartPolicy <code>Always</code> 라) <code>Init:CrashLoopBackOff</code> 로 맴돌고 <b>앱은 영영 안 뜬다</b> — <b>0023</b> 의 재시작 정책이
+init 에도 그대로 적용된다는 걸 몸으로 확인하는 순간이다.
+</div>
+
+<h2>8. Hands-on (b) — 네이티브 사이드카 (kind <code>mastery</code>)</h2>
+
+<p><b>사이드카가 앱과 나란히 도는 Pod.</b> <code>sidecar-demo.yaml</code> — <code>initContainers</code> 에 있지만 <code>restartPolicy: Always</code> 라 끝나지 않고 앱과 공존한다:</p>
+
+<div class="cluster"><span class="ctx">sidecar-demo.yaml</span>
+<span class="out">apiVersion: v1
+kind: Pod
+metadata:
+  name: sidecar-demo
+spec:
+  initContainers:
+  - name: logger              <span class="hl"># init 자리에 있지만…</span>
+    image: busybox:1.36
+    restartPolicy: Always     <span class="hl"># ← 이 한 줄이 네이티브 사이드카로 만든다</span>
+    command: ['sh', '-c', 'while true; do echo "[sidecar] tick"; sleep 5; done']
+  containers:
+  - name: app
+    image: nginx:1.27         <span class="hl"># 사이드카가 Ready 된 뒤 시작, 사이드카는 계속 돎</span></span>
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f sidecar-demo.yaml</span>
+<span class="out">pod/sidecar-demo created</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pod sidecar-demo</span>
+<span class="out">NAME           READY   STATUS    RESTARTS   AGE
+sidecar-demo   <span class="hl">2/2</span>       Running   0          8s   <span class="hl"># 2/2 — 사이드카와 앱이 나란히 Running</span></span>
+<span class="prompt">$</span> <span class="cmd">kubectl logs sidecar-demo -c logger --tail=2</span>
+<span class="out">[sidecar] tick
+[sidecar] tick</span>
+</div>
+
+<div class="note"><b>일반 사이드카였다면?</b> 위 <code>logger</code> 를 <code>initContainers</code> 대신 <code>containers:</code> 에 넣고 <code>restartPolicy</code> 줄을 지우면
+동작은 비슷해 보인다(2/2 Running). 차이는 <b>순서 보장</b>과 <b>Job 에서의 종료</b>에서 드러난다 — <code>kind create cluster</code> 가 1.29+ 이미지를 쓰므로
+네이티브 사이드카 필드가 그대로 먹는다. 구버전 kind 라면 <code>restartPolicy: Always</code> 가 무시될 수 있으니 <code>kubectl version</code> 으로 서버 1.29+ 를 확인하라.</div>
+
+<p>정리: <code>kubectl delete ns lab &amp;&amp; kubectl config set-context --current --namespace=default</code>.</p>
+
+<div class="note"><b>시험 범위 표시:</b> KCNA 는 <b>"init 컨테이너 개념"</b>(앱 전에 순차·완료 대기)까지가 범위다.
+<b>네이티브 사이드카</b>·사이드카 <b>패턴</b>·Job 완료 상호작용은 <b>CKAD 심화</b> — 여기선 "왜 이렇게 설계됐나"의 감을 잡아 두면 CKAD 로 매끄럽게 이어진다.</div>
+
+<h2>9. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. init 컨테이너가 <b>2개</b>인 Pod 를 만들었다. 실행 방식으로 옳은 것은?</p>
+  <div class="opts">
+    <button class="opt">두 init 이 앱 컨테이너와 함께 셋 다 병렬로 시작된다</button>
+    <button class="opt" data-correct="true">init-1 이 성공 종료해야 init-2 가 시작되고, 둘 다 끝나야 앱 컨테이너들이 병렬 시작된다</button>
+    <button class="opt">init 은 앱이 먼저 뜬 뒤 백그라운드로 실행된다</button>
+  </div>
+  <div class="explain">init 컨테이너는 <b>하나씩 순차</b>로 돌며 각자 <b>exit 0</b> 를 기다린다. 전부 성공한 뒤에야 앱 컨테이너(<code>containers:</code>)들이 <b>병렬</b>로 시작된다. 그전까지 Pod 는 <code>Init:0/2</code> 등에 멈춘다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. (레슨 0009 복습) Job 의 main 컨테이너에 로깅 <b>일반 사이드카</b>(그냥 <code>containers:</code> 에 추가)를 붙였다. main 이 <code>exit 0</code> 로 끝났다. Job 은?</p>
+  <div class="opts">
+    <button class="opt">즉시 Complete 된다 — main 이 성공했으므로</button>
+    <button class="opt" data-correct="true">Complete 하지 못한다 — 사이드카가 계속 돌아 살아있는 컨테이너가 남기 때문</button>
+    <button class="opt">Failed 로 끝난다 — 사이드카가 main 을 방해했으므로</button>
+  </div>
+  <div class="explain">일반 사이드카는 "끝"이 없어 계속 돈다. Job 은 Pod 안에 실행 중인 컨테이너가 남아 있어 <b>Complete 하지 못하고 매달린다</b>. 이를 정의로 푸는 것이 <b>네이티브 사이드카</b> — main 이 끝나면 사이드카도 종료되어 Job 이 완료된다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0016 대비) 네이티브 사이드카를 만드는 방법과 그 보장으로 옳은 것은?</p>
+  <div class="opts">
+    <button class="opt"><code>containers:</code> 에 컨테이너를 추가하면 앱보다 먼저 뜨는 게 보장된다</button>
+    <button class="opt">Pod 의 <code>restartPolicy: Always</code> 를 설정하면 모든 컨테이너가 사이드카가 된다</button>
+    <button class="opt" data-correct="true"><code>initContainers</code> 항목에 <code>restartPolicy: Always</code> 를 주면, 앱보다 <b>먼저</b> 뜨고 앱과 나란히 돌다 앱 <b>이후에</b> 종료된다</button>
+  </div>
+  <div class="explain">네이티브 사이드카(1.29 stable)는 <b><code>initContainers</code> 안의 컨테이너에 <code>restartPolicy: Always</code></b> 를 준 것이다. init 자리라 앱보다 먼저 뜨고, Always 라 끝나지 않고 앱과 공존하다, 앱 종료 후 내려간다. 일반 <code>containers:</code> 사이드카는 이 순서 보장이 없다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2·Q3 를 맞히면 init 컨테이너의 <b>순차·완료 대기</b> 규칙, Job 에서의 <b>사이드카 완료 차단</b> 문제,
+그리고 네이티브 사이드카의 <b>"앞에 up, 뒤에 down"</b> 보장이 ✅ — <b>0016</b> 메시 사이드카의 정체가 메커니즘 수준에서 열렸다.
+다음(<b>0026+</b>)은 이 컨테이너들이 공유 볼륨으로 바통을 넘기는 실전 조립으로 이어진다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">init 과 사이드카는 "언제 뜨고 언제 죽나"의 타이밍이 핵심이라 헷갈리기 쉽다. 궁금한 것만 펼쳐 보면 된다.</p>
+
+<details class="faq">
+<summary>init 컨테이너랑 그냥 앱 컨테이너, 뭐가 달라요?</summary>
+<div class="a"><p>둘 다 같은 Pod 안에 있지만 <b>시점</b>이 다르다. init 은 앱 컨테이너 <b>전에</b>, <b>하나씩 순서대로</b>, <b>성공 종료할 때까지</b> 돈다. 앱 컨테이너(<code>containers:</code>)는 init 이 모두 끝난 뒤 <b>병렬로</b> 시작되어 계속 산다. init 은 "판 깔기(준비 작업)", 앱은 "본 작업"이라고 보면 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>왜 준비 작업을 앱 코드 안에서 하지 않고 init 으로 빼나요?</summary>
+<div class="a"><p><b>관심사 분리</b> 때문이다. "DB 준비 대기·설정 다운로드" 같은 인프라성 선행 작업을 앱 이미지에 넣으면 앱이 무거워지고, 다른 앱에서 재사용도 안 된다. init 으로 빼면 앱 이미지는 앱만 하면 되고, 대기/셋업 로직은 작은 busybox 같은 이미지로 <b>재사용·교체</b>가 쉽다. 또 init 은 앱보다 <b>강한 권한</b>(예: 볼륨 권한 변경)을 잠깐만 가질 수 있어 보안에도 유리하다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>Init:0/1</code> 에서 Pod 가 안 넘어가요. 뭘 봐야 하나요?</summary>
+<div class="a"><p>init 컨테이너가 아직 성공 종료(exit 0)를 못 한 것이다. <code>kubectl logs &lt;pod&gt; -c &lt;init-name&gt;</code> 로 init 로그를, <code>kubectl describe pod &lt;pod&gt;</code> 로 이벤트를 본다. "DB 대기" 같은 init 이라면 <b>진짜로 그 의존성이 안 떠서</b> 정상적으로 기다리는 중일 수도 있다. init 이 <b>계속 실패</b>하면 <b>0023</b> 의 restartPolicy 에 따라 재시도(<code>CrashLoopBackOff</code>)한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>init 이 실패하면 앱은 조금이라도 뜨나요?</summary>
+<div class="a"><p>아니다. <b>전혀 안 뜬다</b>. init 이 성공해야만 앱 컨테이너가 시작되므로, init 이 실패하면 Pod 는 <code>Init:Error</code> 또는 <code>Init:CrashLoopBackOff</code> 에 머물고 앱은 시작조차 되지 않는다. 이게 오히려 장점 — "의존성이 준비 안 됐는데 앱이 반쯤 떠서 에러를 뿌리는" 상황을 원천 차단하는 <b>게이트</b>가 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>사이드카가 정확히 뭐예요? <b>0016</b> 에서 본 그거랑 같아요?</summary>
+<div class="a"><p>같다. <b>사이드카</b>는 앱 컨테이너 <b>옆에 붙어</b> 앱을 대신하거나 보조하는 컨테이너다(로깅 수집·프록시·설정 리로더 등). <b>0016</b> 의 메시가 자동 주입하던 Envoy 프록시가 대표적인 사이드카다. 이 레슨은 그 사이드카를 "어떻게 안전하게(순서 보장) 붙이나"라는 <b>메커니즘</b>을 다룬다.</p></div>
+</details>
+
+<details class="faq">
+<summary>네이티브 사이드카는 왜 하필 <code>initContainers</code> 에 넣어요? 이상하지 않나요?</summary>
+<div class="a"><p>영리한 재활용이다. 사이드카에 필요한 건 "앱보다 <b>먼저</b> 떠야 한다"는 성질인데, 그건 이미 init 컨테이너가 가진 성질이다. 그래서 init 자리에 넣되 <code>restartPolicy: Always</code> 를 붙여 "먼저 뜨지만 <b>끝나지 않고 계속 도는</b>" 컨테이너로 만든 것이다. 새 필드를 만들지 않고 기존 init 순서 보장을 그대로 얻는 설계다.</p></div>
+</details>
+
+<details class="faq">
+<summary>그냥 <code>containers:</code> 에 컨테이너 하나 더 넣는 옛 방식은 이제 쓰면 안 되나요?</summary>
+<div class="a"><p>여전히 동작하고, 순서가 안 중요한 단순한 보조 컨테이너면 충분하다. 다만 <b>시작/종료 순서가 중요</b>하거나(프록시가 앱보다 먼저 떠야 함) <b>Job 에서 사이드카를 쓸 때</b>는 옛 방식이 문제를 일으키므로 <b>네이티브 사이드카</b>가 정답이다. "순서·Job 이 걸리면 네이티브, 아니면 아무거나"로 기억하면 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Job 이 Complete 안 되고 계속 Running 이에요. 사이드카 때문인가요?</summary>
+<div class="a"><p>그럴 확률이 높다. <b>0009</b> 에서 Job 은 "main 이 성공 종료하면 완료"인데, <code>containers:</code> 에 넣은 <b>일반 사이드카</b>는 안 죽으니 살아있는 컨테이너가 남아 Job 이 <b>영영 Complete 못 한다</b>. 사이드카를 <code>initContainers</code> + <code>restartPolicy: Always</code>(네이티브)로 바꾸면 main 종료 시 사이드카도 내려가 Job 이 완료된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>init 컨테이너와 네이티브 사이드카가 앱과 <b>볼륨</b>을 공유하나요?</summary>
+<div class="a"><p>그렇다. <b>0002</b> 에서 배운 대로 한 Pod 의 컨테이너들은 볼륨(예: <code>emptyDir</code>)과 네트워크를 공유한다. 그래서 init 이 <code>emptyDir</code> 에 설정 파일을 받아두면 앱이 그대로 읽고(바통 넘기기), 로깅 사이드카는 앱이 볼륨에 쓴 로그 파일을 읽어 내보낸다. 컨테이너를 나누되 데이터는 공유하는 게 이 패턴들의 핵심이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>내 kind 클러스터에서 네이티브 사이드카가 안 먹으면요?</summary>
+<div class="a"><p>서버 버전이 <b>1.29 미만</b>이면 <code>initContainers</code> 안의 <code>restartPolicy: Always</code> 가 무시되거나 거부될 수 있다. <code>kubectl version</code> 으로 Server Version 을 확인하고, 낮으면 최신 kind 로 <code>kind create cluster</code> 를 다시 만들면 된다(요즘 kind 는 1.29+ 이미지를 기본으로 쓴다). init 컨테이너 자체(Hands-on a)는 아주 오래전부터 되므로 버전과 무관하게 실습 가능하다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/workloads/pods/init-containers/">공식 문서: Init Containers</a> —
+앱 전 순차 실행·완료 대기·실패 시 재시작 규칙의 원전.
+<a href="https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/">Sidecar Containers</a> 에서 네이티브 사이드카(<code>restartPolicy: Always</code> init)와 Job 완료 상호작용을,
+<a href="https://kubernetes.io/docs/concepts/workloads/pods/">Pods</a> 에서 멀티컨테이너 Pod 의 볼륨·네트워크 공유를 다시 확인할 수 있다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "init 에서 DB 대기를 실제로 어떻게 짜나?", "네이티브 사이드카의 Ready 판정은 어떻게 하나(startupProbe)?",
+"메시(0016)가 언제 네이티브 사이드카로 갈아탔나?" — 원하면 짧게 이어 붙일 수 있다.
+</div>
+
+<nav class="nav">
+  <a href="0024-graceful-termination.html">← 0024 우아한 종료</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

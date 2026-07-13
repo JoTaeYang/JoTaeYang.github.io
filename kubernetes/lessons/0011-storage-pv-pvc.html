@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0011 — 스토리지: 요청(PVC), 공급(PV), 공장(StorageClass)</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0011 <span class="tag">Level 1 · 실습</span></p>
+<h1>스토리지: 요청(PVC), 공급(PV), 공장(StorageClass)</h1>
+<p class="subtitle">Pod 는 죽으면 안의 파일도 사라진다. 데이터를 살아남게 하려면 스토리지를 Pod 밖에 두고 <em>요청</em>해서 <em>빌려 쓴다</em>. 0009 StatefulSet 이 예고한 그 디스크다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> PVC 로 디스크를 <em>요청</em>하면 StorageClass 가 PV 를 <em>자동으로 만들어</em>
+붙여준다(동적 프로비저닝). 그 볼륨에 파일을 쓰고 <b>Pod 를 지운 뒤 새 Pod 로 같은 PVC 를 다시 마운트</b>하면
+파일이 그대로 살아 있는 것을 확인한다 — <code>emptyDir</code> 였다면 사라졌을 파일이다.
+</div>
+
+<h2>1. 프레임 — 요청과 공급을 분리한다</h2>
+
+<p>앱 개발자는 "1Gi 짜리 디스크가 필요해"라고 <b>요청(PVC)</b>만 하면 된다. 그게 NFS 인지 EBS 인지
+로컬 디스크인지 <em>몰라도 된다</em>. 실제 저장 장치를 마련하는 <b>공급(PV)</b>은 인프라의 몫이고,
+요청이 올 때마다 PV 를 즉석에서 찍어내는 <b>공장(StorageClass)</b>이 그 사이를 잇는다.</p>
+
+<table class="cmp">
+<tr><th>리소스</th><th>비유</th><th>누구의 것</th><th>한 줄 정의</th></tr>
+<tr>
+  <td><b>PVC</b> (PersistentVolumeClaim)</td>
+  <td>주문서</td>
+  <td>앱 개발자</td>
+  <td>"이만큼(1Gi), 이 접근 방식(RWO)으로 디스크 줘"</td>
+</tr>
+<tr>
+  <td><b>PV</b> (PersistentVolume)</td>
+  <td>실제 창고</td>
+  <td>클러스터/인프라</td>
+  <td>진짜 저장 공간 한 조각. PVC 와 <b>1:1 로 묶인다</b>(Bound)</td>
+</tr>
+<tr>
+  <td><b>StorageClass</b></td>
+  <td>주문 받는 공장</td>
+  <td>클러스터 관리자</td>
+  <td>PVC 가 오면 PV 를 <b>즉석에서 만들어</b> 붙여줌(동적 프로비저닝)</td>
+</tr>
+</table>
+
+<div class="aha">
+<span class="label">아하</span>
+0008 RBAC 이 "Role(명사) ↔ RoleBinding(동사)"으로 나뉘었듯, 스토리지도 <b>요청(PVC) ↔ 공급(PV)</b>으로
+나뉜다. 이 분리 덕분에 개발자는 인프라를 몰라도 되고, 관리자는 앱을 몰라도 된다. 둘을 이어주는 게
+StorageClass — 요청이 올 때마다 딱 맞는 PV 를 <em>자동 생성</em>해 Bound 시킨다.
+</div>
+
+<h2>2. 실습 — 요청하고, 쓰고, Pod 를 죽여도 살아남는다</h2>
+
+<div class="note">kind 클러스터 <code>mastery</code>, namespace <code>lab</code> 이어서. kind 는 기본 StorageClass(<code>standard</code>, local-path)를 이미 갖고 있어 동적 프로비저닝이 바로 된다.</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get storageclass</span>
+<span class="out">NAME                 PROVISIONER             ... VOLUMEBINDINGMODE
+standard (default)   rancher.io/local-path   ... <span class="hl">WaitForFirstConsumer</span></span>
+</div>
+
+<p><b>추적 1 — 주문서(PVC)를 낸다.</b> <code>data-pvc.yaml</code>:</p>
+
+<div class="cluster"><span class="ctx">data-pvc.yaml</span>
+<span class="out">apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+spec:
+  accessModes: ["ReadWriteOnce"]   <span class="hl"># RWO: 한 노드에서만 읽고 쓴다</span>
+  resources:
+    requests:
+      storage: 1Gi                 <span class="hl"># "1Gi 짜리로 줘" — 0006 의 requests 와 같은 어휘</span></span>
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f data-pvc.yaml && kubectl get pvc data</span>
+<span class="out">NAME   STATUS    VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS
+data   <span class="hl">Pending</span>   ...                                    standard    ← 아직 PV 가 없다?!</span>
+</div>
+
+<div class="warn">
+<b>이 <code>Pending</code> 은 정상이다.</b> kind 의 StorageClass 는 <code>WaitForFirstConsumer</code> 모드라,
+<em>실제로 이 PVC 를 쓰는 Pod 가 스케줄될 때까지</em> PV 만들기를 미룬다 (그래야 Pod 가 갈 노드에
+맞춰 로컬 디스크를 만들 수 있으니까). 0010 의 LoadBalancer <code>&lt;pending&gt;</code> 과 헷갈리지 마라 —
+저건 영원한 대기(고장 아님), 이건 "소비자를 기다리는 중"이라 곧 풀린다.
+</div>
+
+<p><b>추적 2 — 소비자(Pod)를 붙이면 PV 가 태어난다.</b> <code>writer.yaml</code>:</p>
+
+<div class="cluster"><span class="ctx">writer.yaml</span>
+<span class="out">apiVersion: v1
+kind: Pod
+metadata:
+  name: writer
+spec:
+  containers:
+  - name: app
+    image: busybox
+    command: ["sh", "-c", "sleep 3600"]
+    volumeMounts:
+    - name: vol
+      mountPath: /data              <span class="hl"># 컨테이너 안 /data 에 볼륨을 붙인다</span>
+  volumes:
+  - name: vol
+    persistentVolumeClaim:
+      claimName: data               <span class="hl"># 위에서 낸 주문서를 지정</span></span>
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f writer.yaml && kubectl get pvc,pv</span>
+<span class="out">NAME    STATUS   VOLUME        CAPACITY   STORAGECLASS
+pvc/data <span class="hl">Bound</span>   pvc-9f3a...   1Gi        standard      ← Pod 가 뜨자 Bound!
+
+NAME              CAPACITY   RECLAIM POLICY   STATUS   CLAIM
+pv/pvc-9f3a...    1Gi        Delete           Bound    lab/data   ← PV 가 자동 생성됐다</span>
+<span class="prompt">$</span> <span class="cmd">kubectl exec writer -- sh -c 'echo "hello from lesson 11" > /data/note.txt'</span>
+</div>
+
+<p>주문서(PVC)에 창고(PV)가 자동으로 붙었다 — 아무도 PV 를 손으로 안 만들었다. StorageClass 공장이 찍어낸 것이다.</p>
+
+<p><b>추적 3 — Pod 를 죽인다. 파일은 살아남는다.</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl delete pod writer</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f writer.yaml            # 같은 PVC 를 다시 마운트하는 새 Pod</span>
+<span class="prompt">$</span> <span class="cmd">kubectl exec writer -- cat /data/note.txt</span>
+<span class="out"><span class="hl">hello from lesson 11</span>   ← Pod 는 새로 태어났지만 파일은 그대로다</span>
+</div>
+
+<div class="aha">
+<span class="label">아하</span>
+Pod 안에 그냥 썼거나 <code>emptyDir</code> 볼륨이었다면, <code>delete pod</code> 와 함께 파일도 사라졌을 것이다.
+데이터가 살아남은 이유는 딱 하나 — 파일이 <b>Pod 밖의 PV</b> 에 있고, PVC 라는 주문서로 <em>연결만</em>
+했기 때문이다. Pod 는 왔다 가도, 볼륨은 남는다. 이게 "Persist" 의 뜻이다.
+</div>
+
+<p>정리: <code>kubectl delete ns lab</code>. RECLAIM POLICY 가 <code>Delete</code> 라 namespace 와 함께 PVC 가
+지워지면 PV 와 실제 디스크도 자동 회수된다.</p>
+
+<h2>3. 0009 의 약속을 지킨다 — StatefulSet 의 volumeClaimTemplates</h2>
+
+<p>0009 에서 StatefulSet 의 <code>web-1</code> 이 죽어도 같은 이름으로 돌아온다고 했다. 거기에
+<b>디스크</b>까지 붙이는 게 <code>volumeClaimTemplates</code> 다 — StatefulSet 이 Pod 마다
+<em>전용 PVC 를 자동으로</em> 찍어낸다(<code>data-web-0</code>, <code>data-web-1</code>…). 그래서 <code>web-1</code> 이
+죽었다 살아나도 <b>자기 디스크</b>를 정확히 다시 문다. 오늘 배운 PVC 가 그 신원의 물리적 실체다.</p>
+
+<div class="note">
+접근 모드(access modes) 세 가지만 눈에 익혀 두자: <b>RWO</b>(ReadWriteOnce, 한 노드) ·
+<b>ROX</b>(ReadOnlyMany, 여러 노드 읽기) · <b>RWX</b>(ReadWriteMany, 여러 노드 읽기/쓰기 — NFS 등만 지원).
+대부분의 블록 스토리지(EBS 등)는 RWO 다. KCNA 는 이 어휘 수준이면 충분하고, 실기는 CKAD 다.
+</div>
+
+<h2>4. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. PVC 를 만들었는데 STATUS 가 <code>Pending</code> 이다. kind 기본 환경에서 가장 흔한 정상 사유는?</p>
+  <div class="opts">
+    <button class="opt">StorageClass 가 없어 아무도 PV 를 못 만든다</button>
+    <button class="opt" data-correct="true"><code>WaitForFirstConsumer</code> — 이 PVC 를 쓰는 Pod 가 아직 없어 PV 생성을 미루는 중</button>
+    <button class="opt">1Gi 를 만족하는 노드가 없어 스케줄러가 거부했다</button>
+  </div>
+  <div class="explain">kind 의 <code>standard</code> SC 는 소비자(Pod)가 스케줄될 때까지 프로비저닝을 미룬다 — Pod 를 붙이면 즉시 Bound 된다. LoadBalancer 의 영원한 <code>&lt;pending&gt;</code>(0010)과 달리 이건 곧 풀리는 대기다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. <code>writer</code> Pod 를 지우고 같은 PVC 를 마운트한 새 Pod 를 만들었더니 <code>/data/note.txt</code> 가 그대로 있다. 이유는?</p>
+  <div class="opts">
+    <button class="opt">쿠버네티스가 Pod 삭제 전 파일을 자동 백업해 복원했다</button>
+    <button class="opt" data-correct="true">파일은 Pod 밖 PV 에 있고, PVC 는 그 PV 를 가리키는 연결일 뿐이라 Pod 수명과 무관하다</button>
+    <button class="opt">busybox 이미지 안에 파일이 구워져 재생성됐다</button>
+  </div>
+  <div class="explain">영속성의 핵심: 데이터의 집은 PV(Pod 밖)이고 PVC 는 그 집 주소다. Pod 는 주소를 들고 잠깐 들렀다 갈 뿐이라, Pod 가 죽어도 집과 그 안의 파일은 남는다. <code>emptyDir</code> 였다면 Pod 와 함께 사라졌을 것이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0009 복습) StatefulSet 의 <code>web-1</code> 이 자기 <b>디스크</b>까지 정확히 되찾게 하는 필드는?</p>
+  <div class="opts">
+    <button class="opt">Deployment 의 <code>strategy: RollingUpdate</code></button>
+    <button class="opt" data-correct="true">StatefulSet 의 <code>volumeClaimTemplates</code> — Pod 마다 전용 PVC 를 자동 생성</button>
+    <button class="opt">Service 의 <code>clusterIP: None</code> (headless)</button>
+  </div>
+  <div class="explain">간격 반복: 0009 의 안정된 <em>이름</em>에 <code>volumeClaimTemplates</code> 가 안정된 <em>디스크</em>를 더한다. <code>data-web-1</code> PVC 가 인덱스 1 에 고정돼 있어, web-1 이 되살아나면 같은 PVC=같은 PV 를 다시 문다. headless service 는 이름(네트워크 신원) 담당으로, 역할이 다르다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2 를 맞히면 스토리지 ✅ — 이걸로 <b>KCNA Fundamentals(비중 46%)의 ⬜ 칸이 사실상 완주</b>다.
+다음은 실습을 잠깐 멈추고 <b>Container Orchestration 도메인(~22%)</b>의 어휘 — CRI / CNI / CSI
+"인터페이스 3형제"로 넘어가, 지금까지 손으로 만진 것들의 <em>밑단</em>을 이름 붙여 정리한다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">실습하다 떠오르는 "어? 이건 왜 이러지?"를 미리 모았다. 궁금한 것만 펼쳐 보면 된다 — 안 궁금하면 접힌 채 넘어가도 된다.</p>
+
+<details class="faq">
+<summary>PV 랑 PVC, 왜 굳이 둘로 나눠요? 하나면 안 되나요?</summary>
+<div class="a"><p>관심사를 분리하기 위해서다. 앱 개발자는 "1Gi 필요"라고 <b>요청(PVC)</b>만 하면 되고, 그게 실제로 EBS 인지 NFS 인지 로컬인지(=<b>공급, PV</b>)는 인프라가 정한다. 개발자가 스토리지 종류를 몰라도 앱을 옮겨 심을 수 있는 게 이 분리의 값어치다.</p></div>
+</details>
+
+<details class="faq">
+<summary>PV 를 제가 직접 안 만들었는데 어떻게 생겼어요?</summary>
+<div class="a"><p><b>StorageClass</b>(공장)가 동적으로 만들어 줬다. PVC 가 오면 SC 의 프로비저너가 즉석에서 PV 를 찍어 Bound 시킨다. SC 가 없던 옛날엔 관리자가 PV 를 미리 손으로 만들어 뒀는데(정적 프로비저닝), 요즘은 대부분 동적이다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>emptyDir</code> 는 뭐예요? 그것도 볼륨 아닌가요?</summary>
+<div class="a"><p>맞다, 하지만 <b>Pod 수명에 묶인</b> 임시 볼륨이다 — Pod 가 사라지면 함께 지워진다. 같은 Pod 안 컨테이너끼리 파일을 주고받거나 캐시 용도엔 좋지만, 데이터를 살려야 하면 PVC(=Pod 밖 PV)를 써야 한다. 오늘 실습이 그 차이를 증명했다.</p></div>
+</details>
+
+<details class="faq">
+<summary>RWO 인데 왜 "한 노드"예요? "한 Pod" 아니고요?</summary>
+<div class="a"><p>ReadWriteOnce 는 <b>한 노드</b>에서 읽고 쓸 수 있다는 뜻이라, 같은 노드에 있는 여러 Pod 는 동시에 붙을 수 있다. 진짜 "한 Pod 만"이 필요하면 RWOP(ReadWriteOncePod)라는 별도 모드가 있다. 여러 노드에서 동시에 쓰려면 RWX(NFS 등)가 필요하다.</p></div>
+</details>
+
+<details class="faq">
+<summary>RECLAIM POLICY 가 <code>Delete</code> 던데, 이게 위험한 거 아니에요?</summary>
+<div class="a"><p>PVC 를 지우면 PV 와 실제 디스크까지 함께 삭제된다는 뜻이라, 실무의 중요한 데이터엔 위험할 수 있다. 그래서 운영 스토리지는 <code>Retain</code>(PVC 를 지워도 PV·데이터는 남겨 수동 회수)으로 두는 경우가 많다. kind 실습은 정리 편하라고 Delete 가 기본이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>PVC 를 다 쓴 뒤 용량을 늘릴 수 있어요?</summary>
+<div class="a"><p>StorageClass 가 <code>allowVolumeExpansion: true</code> 면, PVC 의 <code>requests.storage</code> 를 더 큰 값으로 <code>apply</code> 해서 늘릴 수 있다(줄이는 건 안 된다). 대부분의 클라우드 SC 가 지원한다. CKAD 단골 시나리오다.</p></div>
+</details>
+
+<details class="faq">
+<summary>0005 에서 ConfigMap 을 volume 으로 마운트한 거랑 뭐가 달라요?</summary>
+<div class="a"><p>둘 다 "볼륨"이지만 목적이 반대다. ConfigMap/Secret 볼륨은 <b>읽기용 설정 주입</b>(앱이 안 바꿈), PVC 는 <b>앱이 쓰고 남기는 데이터</b>다. 전자는 클러스터가 값을 채워주고, 후자는 앱이 채운다. 마운트 문법이 비슷해 헷갈리기 쉬우니 "누가 쓰나"로 가른다.</p></div>
+</details>
+
+<details class="faq">
+<summary>같은 PVC 를 여러 Pod 가 동시에 마운트하면요?</summary>
+<div class="a"><p>접근 모드에 달렸다. RWO(대부분의 블록 스토리지)면 <b>같은 노드</b>의 Pod 들만 동시에 가능하고, 다른 노드의 Pod 는 못 붙는다. 여러 노드에서 동시에 쓰려면 RWX 를 지원하는 스토리지(NFS, CephFS 등)가 필요하다.</p></div>
+</details>
+
+<details class="faq">
+<summary>StatefulSet 의 <code>volumeClaimTemplates</code> 는 PVC 를 몇 개 만들어요?</summary>
+<div class="a"><p>replicas 수만큼 — <code>replicas: 3</code> 이면 <code>data-web-0/1/2</code> 세 개를 각각 만든다. 그리고 <b>StatefulSet 을 지워도 이 PVC 들은 안 지워진다</b>(데이터 보호). 실수로 삭제했다가 다시 만들면 같은 PVC 를 도로 붙여 데이터가 살아 있는 게 그 덕이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>PV 가 실제로 어디에 저장돼요? kind 에선요?</summary>
+<div class="a"><p>kind 의 local-path 프로비저너는 노드(도커 컨테이너) 안 호스트 경로에 디렉터리를 만들어 쓴다. 클라우드라면 EBS/PD 같은 진짜 블록 볼륨이 붙는다. 어디에 있든 앱은 <code>/data</code> 로만 보므로 신경 쓸 필요가 없다 — 그게 이 추상화의 핵심이다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/storage/persistent-volumes/">공식 문서: Persistent Volumes</a> ·
+<a href="https://kubernetes.io/docs/concepts/storage/storage-classes/">Storage Classes</a> ·
+<a href="https://kubernetes.io/docs/concepts/storage/dynamic-provisioning/">Dynamic Provisioning</a> — 오늘의 원전.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "정적(static) 프로비저닝은 언제 쓰나?", "CSI 드라이버가 뭐지?(다음 레슨 예고)",
+"snapshot 은 어떻게 뜨나?" — 전부 CKAD/CKS 로 이어지는 좋은 실이다.
+</div>
+
+<nav class="nav">
+  <a href="0010-external-exposure.html">← 0010 외부 노출</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

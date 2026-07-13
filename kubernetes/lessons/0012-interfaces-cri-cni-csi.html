@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0012 — 인터페이스 3형제: CRI · CNI · CSI</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0012 <span class="tag">Level 1 · 어휘+관찰</span></p>
+<h1>인터페이스 3형제: CRI · CNI · CSI</h1>
+<p class="subtitle">쿠버네티스는 실행·네트워크·스토리지를 직접 하지 않는다. 대신 <b>표준 소켓</b> 세 개를 뚫어두고, 거기에 꽂히는 플러그인이 실제 일을 한다. 지금까지 손으로 만진 것들의 밑단에 이름을 붙인다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> 실습으로 이미 겪은 세 가지 — 컨테이너가 <em>실행</em>되고(0007),
+Pod 가 <em>IP</em>를 받고(0003), PV 가 <em>스토리지</em>를 얻은(0011) — 그 밑에 각각
+<b>CRI · CNI · CSI</b> 라는 표준 인터페이스가 있었음을 <code>내 클러스터에서 직접 확인</code>한다.
+</div>
+
+<h2>1. 프레임 — 쿠버네티스는 소켓의 집합이다</h2>
+
+<p>쿠버네티스는 "무엇을 할지"(desired state)를 정하고, "어떻게 할지"의 실제 구현은
+<b>교체 가능한 플러그인</b>에 위임한다. 그 위임의 규격이 인터페이스다. 이름은 전부 <code>C_I</code> 꼴이다.</p>
+
+<table class="cmp">
+<tr><th>인터페이스</th><th>무엇을 꽂나</th><th>담당</th><th>내가 이미 본 곳</th></tr>
+<tr>
+  <td><b>CRI</b> (Container Runtime Interface)</td>
+  <td>containerd, CRI-O</td>
+  <td>컨테이너 <b>실행</b></td>
+  <td>kubelet 이 nodeName 을 보고 Pod 를 띄운 것 (0007)</td>
+</tr>
+<tr>
+  <td><b>CNI</b> (Container Network Interface)</td>
+  <td>Calico, Cilium, kindnet</td>
+  <td>Pod <b>네트워크</b>(IP 부여)</td>
+  <td>모든 Pod 가 IP 를 받고 서로 통신한 것 (0003)</td>
+</tr>
+<tr>
+  <td><b>CSI</b> (Container Storage Interface)</td>
+  <td>ebs.csi, 각종 드라이버</td>
+  <td><b>스토리지</b> 프로비저닝</td>
+  <td>StorageClass 가 PV 를 자동 생성한 것 (0011)</td>
+</tr>
+</table>
+
+<div class="aha">
+<span class="label">아하</span>
+왜 직접 안 하고 소켓으로 뺐을까? <b>선택의 자유</b> 때문이다. AWS 는 EBS(CSI), 사내는 Ceph(CSI),
+네트워크는 보안 정책이 세면 Cilium(CNI) — 환경마다 최적이 다르다. 쿠버네티스가 하나를 강제하는 대신
+"이 규격만 맞추면 뭐든 꽂아라"라고 열어둔 덕에, 같은 YAML 이 어디서나 돈다. 0008 의 "규칙과 실행 주체
+분리", 0011 의 "요청과 공급 분리"와 같은 철학의 확장이다.
+</div>
+
+<h2>2. 실습 — 내 클러스터에서 셋을 찾아낸다</h2>
+
+<div class="note">새로 만들 것 없이 <b>지금 돌고 있는</b> kind 클러스터를 관찰만 한다. 어휘를 실물에 붙이는 게 목적이다.</div>
+
+<p><b>CRI — 이 노드의 런타임은?</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get nodes -o wide</span>
+<span class="out">NAME                   STATUS   ...   CONTAINER-RUNTIME
+mastery-control-plane  Ready    ...   <span class="hl">containerd://1.7.x</span>   ← Docker 가 아니라 containerd</span>
+</div>
+
+<p>kubelet 은 컨테이너를 직접 못 띄운다 — CRI 라는 gRPC 규격으로 <b>containerd</b> 에게 "이 이미지로
+컨테이너 켜"라고 시킨다. 예전엔 Docker 를 썼지만, Docker 는 CRI 를 직접 말하지 못해 <code>dockershim</code>
+어댑터가 필요했고, 그 군더더기를 걷어내며 1.24 에서 제거됐다 (KCNA 단골 문제).</p>
+
+<p><b>CNI — Pod 에게 IP 를 준 자는?</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pods -n kube-system | grep -E 'kindnet|kube-proxy'</span>
+<span class="out"><span class="hl">kindnet</span>-abc12                1/1   Running   ← kind 의 CNI 플러그인
+kube-proxy-xyz34             1/1   Running   ← Service 규칙(0003)을 노드에 심는 자</span>
+</div>
+
+<p>0003 에서 Pod 마다 IP 가 있고 <code>web</code> 이름으로 통신됐던 건, <b>CNI 플러그인(kindnet)</b>이
+Pod 가 뜰 때마다 IP 를 배정하고 노드 간 경로를 깔아줬기 때문이다. 실무에선 여기 Calico/Cilium 이
+들어가 NetworkPolicy(진단 Q8, Level 2 예정) 같은 정책을 집행한다.</p>
+
+<p><b>CSI — PV 를 만든 자는?</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pods -n local-path-storage</span>
+<span class="out">local-path-provisioner-...   1/1   Running   ← 0011 에서 PV 를 찍어낸 프로비저너</span>
+</div>
+
+<div class="warn">
+<b>정확히 하자:</b> kind 의 <code>local-path-provisioner</code> 는 "스토리지 플러그인"의 자리를 채우지만
+<em>엄밀한 CSI 드라이버는 아니다</em>(간이 로컬 프로비저너다). 진짜 CSI 는 클라우드의
+<code>ebs.csi.aws.com</code>, <code>pd.csi.storage.gke.io</code> 같은 드라이버들이다. 0011 에서 StorageClass 가
+채운 그 <b>슬롯</b>이 CSI 의 자리라는 것만 기억하면 된다 — kind 는 그 슬롯에 간단한 대체품을 꽂았을 뿐.
+</div>
+
+<h2>3. 부록 어휘 — 오케스트레이션 상식 (개념만)</h2>
+
+<p>KCNA 비중상 <b>개념 수준</b>이면 충분하다. 실기(CKA/CKAD)에서 실습으로 다시 만난다 — 지금은 이름과 한 줄만.</p>
+
+<table class="cmp">
+<tr><th>용어</th><th>한 줄</th></tr>
+<tr><td><b>taint / toleration</b></td><td>노드에 "출입 금지" 딱지(taint)를 붙이고, 그 딱지를 견디는(toleration) Pod 만 배치 허용. 전용 노드 만들 때.</td></tr>
+<tr><td><b>node affinity</b></td><td>"GPU 노드에 붙여줘"처럼 Pod 가 노드를 <em>선호/요구</em>하는 규칙. requests(0006)가 양이라면, affinity 는 위치.</td></tr>
+<tr><td><b>HPA</b> (Horizontal Pod Autoscaler)</td><td>CPU/메모리 사용률을 보고 replicas 를 자동으로 늘렸다 줄인다. Pod <b>개수</b>를 조절(수평).</td></tr>
+<tr><td><b>VPA / Cluster Autoscaler</b></td><td>VPA=Pod 의 requests/limits 를 조절(수직), CA=노드 자체를 늘렸다 줄임. 셋을 헷갈리지 않게 "무엇을 늘리나"로 구분.</td></tr>
+</table>
+
+<h2>4. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. kubelet 이 컨테이너를 실제로 띄울 때 대화하는 표준 인터페이스는?</p>
+  <div class="opts">
+    <button class="opt">CNI — 컨테이너에 네트워크를 붙이는 김에 실행도 맡긴다</button>
+    <button class="opt" data-correct="true">CRI — containerd 같은 런타임에 "이 이미지로 켜"라고 지시</button>
+    <button class="opt">CSI — 이미지도 결국 스토리지라 CSI 가 실행을 담당한다</button>
+  </div>
+  <div class="explain">CRI(Container Runtime Interface). kubelet 은 직접 실행하지 않고 CRI 로 containerd/CRI-O 에 위임한다. 이미지=실행=CRI, 네트워크=CNI, 스토리지=CSI 로 역할이 깔끔히 갈린다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. "Docker 가 쿠버네티스에서 제거됐다"는 말의 정확한 의미는?</p>
+  <div class="opts">
+    <button class="opt">이제 Docker 로 빌드한 이미지는 쿠버네티스에서 못 돌린다</button>
+    <button class="opt" data-correct="true">kubelet 이 Docker 를 <b>런타임으로</b> 쓰던 <code>dockershim</code> 어댑터가 빠진 것 — 이미지(OCI)는 그대로 돈다</button>
+    <button class="opt">Docker 사에서 쿠버네티스 지원을 공식 종료했다</button>
+  </div>
+  <div class="explain">빠진 건 "kubelet↔Docker" 사이의 군더더기 어댑터(dockershim)뿐이다. Docker 로 빌드한 이미지는 OCI 표준이라 containerd 가 그대로 실행한다 — 빌드 도구로서의 Docker 와 런타임으로서의 Docker 를 구분하는 게 이 문제의 핵심이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0011 복습) 클라우드에서 StorageClass 가 PV 를 자동 생성할 때 실제로 그 슬롯에 꽂히는 것은?</p>
+  <div class="opts">
+    <button class="opt">CNI 플러그인 — 볼륨도 노드에 연결되니 네트워크의 일이다</button>
+    <button class="opt" data-correct="true">CSI 드라이버 — 예: <code>ebs.csi.aws.com</code> 이 실제 EBS 볼륨을 만든다</button>
+    <button class="opt">kube-proxy — 스토리지 요청을 알맞은 노드로 프록시한다</button>
+  </div>
+  <div class="explain">간격 반복: 0011 의 "공장(StorageClass)"이 부리는 실제 일꾼이 CSI 드라이버다. kind 는 그 자리에 간이 local-path 를 꽂았지만, 클라우드에선 ebs.csi/pd.csi 같은 CSI 드라이버가 진짜 블록 볼륨을 프로비저닝한다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2 를 맞히면 Container Orchestration 도메인의 핵심 어휘 ✅.
+남은 건 비중 낮은 도메인들(Cloud Native Architecture 16% / Observability 8% / Delivery 8%)의 <b>어휘 일괄</b> —
+다음 레슨에서 CNCF 생태계·12-factor·관측성 3기둥·GitOps·Helm 을 몰아서 훑고(과투자 금지),
+그다음이 <b>KCNA 전 도메인 모의 진단 → 응시 일정 확정</b>이다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">실습하다 떠오르는 "어? 이건 왜 이러지?"를 미리 모았다. 궁금한 것만 펼쳐 보면 된다 — 안 궁금하면 접힌 채 넘어가도 된다.</p>
+
+<details class="faq">
+<summary>인터페이스 이름이 왜 다 <code>C_I</code> 예요? 외우기 헷갈려요.</summary>
+<div class="a"><p>가운데 글자만 바꾸면 된다: <b>R</b>untime(실행), <b>N</b>etwork(네트워크), <b>S</b>torage(스토리지). "컨테이너의 실행·연결·저장" 세 가지를 각각 표준화한 것이다. 앞의 C(Container)와 뒤의 I(Interface)는 공통.</p></div>
+</details>
+
+<details class="faq">
+<summary>그럼 Docker 는 이제 아예 쓸모없어진 건가요?</summary>
+<div class="a"><p>아니다. Docker 는 여전히 최고의 <b>이미지 빌드/개발 도구</b>다. 빠진 건 "쿠버네티스 노드가 컨테이너를 <em>실행</em>하는 런타임"으로서의 역할뿐이다. <code>docker build</code> 로 만든 이미지는 OCI 표준이라 containerd 가 그대로 돌린다 — 빌드와 런타임은 다른 이야기다.</p></div>
+</details>
+
+<details class="faq">
+<summary>containerd 랑 CRI-O 는 뭐가 달라요? 뭘 골라야 하죠?</summary>
+<div class="a"><p>둘 다 CRI 를 만족하는 경량 런타임이라, 쿠버네티스 입장에선 바꿔 꽂아도 된다. containerd 는 Docker 에서 갈라져 나와 널리 쓰이고(kind·EKS 등 기본), CRI-O 는 쿠버네티스 전용으로 설계됐다(OpenShift 기본). 초보 단계에선 "둘 다 CRI 구현체" 정도면 충분하다.</p></div>
+</details>
+
+<details class="faq">
+<summary>CNI 플러그인은 왜 이렇게 종류가 많아요? (Calico, Cilium, kindnet…)</summary>
+<div class="a"><p>"Pod 에 IP 주고 연결"이라는 최소 임무는 같지만, 그 위에 얹는 기능이 다르다. kindnet 은 최소 기능(로컬 실습용), Calico/Cilium 은 NetworkPolicy 집행·암호화·관측성 등을 더한다. 보안 요구가 세면 Cilium, 단순하면 가벼운 걸 고른다.</p></div>
+</details>
+
+<details class="faq">
+<summary>local-path 가 CSI 가 아니면, kind 엔 CSI 가 없는 건가요?</summary>
+<div class="a"><p>기본 kind 엔 진짜 CSI 드라이버가 없고, 간이 프로비저너(local-path)가 그 역할을 대신한다. "StorageClass 가 채우는 슬롯 = CSI 의 자리"라는 <b>구조</b>만 같을 뿐이다. 실제 CSI 드라이버(ebs.csi 등)를 kind 에 설치할 수도 있지만, 학습엔 불필요하다.</p></div>
+</details>
+
+<details class="faq">
+<summary>kube-proxy 도 CNI 인가요? 같이 네트워크 하는 것 같은데요.</summary>
+<div class="a"><p>아니다, 역할이 다르다. <b>CNI</b>(kindnet)는 <em>Pod 에 IP 를 주고 Pod 끼리 연결</em>하고, <b>kube-proxy</b>는 <em>Service(0003)의 가상 IP 를 실제 Pod 로 라우팅</em>하는 규칙을 노드에 심는다. 하나는 "Pod 네트워크", 하나는 "Service 네트워크" 담당이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>taint 랑 node affinity, 방향이 헷갈려요.</summary>
+<div class="a"><p>주체가 반대다. <b>taint</b> 는 <em>노드가</em> "아무나 오지 마"라고 미는 것(Pod 이 toleration 으로 견뎌야 허용), <b>affinity</b> 는 <em>Pod 이</em> "저 노드로 가고 싶어"라고 당기는 것이다. 미는 노드 / 당기는 Pod 로 외우면 안 헷갈린다.</p></div>
+</details>
+
+<details class="faq">
+<summary>HPA 는 0006 의 requests/limits 랑 무슨 관계예요?</summary>
+<div class="a"><p>HPA 는 보통 "CPU 사용률이 requests 대비 몇 %"를 기준으로 판단한다 — 그래서 requests(0006)를 잘 잡아야 HPA 가 제대로 동작한다. 사용률이 목표를 넘으면 replicas 를 늘리고, 내려가면 줄인다. requests 가 스케줄링의 기준이자 HPA 의 기준이기도 한 셈이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>HPA, VPA, Cluster Autoscaler — 셋을 한 번에 정리해 주세요.</summary>
+<div class="a"><p>"무엇을 늘리나"로 가른다. <b>HPA</b>=Pod <em>개수</em>(수평), <b>VPA</b>=Pod 하나의 <em>requests/limits</em>(수직), <b>Cluster Autoscaler</b>=<em>노드</em> 수. 트래픽이 늘면 HPA 가 Pod 를 늘리고, 그러다 노드가 모자라면 CA 가 노드를 늘리는 식으로 함께 works.</p></div>
+</details>
+
+<details class="faq">
+<summary>이 인터페이스들은 KCNA 시험에 어떻게 나와요?</summary>
+<div class="a"><p>대개 "kubelet 이 컨테이너 실행에 쓰는 인터페이스는?"(CRI), "Docker 제거의 의미는?"(dockershim), "Pod IP 를 배정하는 것은?"(CNI) 같은 객관식이다. 깊은 설정이 아니라 <b>역할 매칭</b>이 핵심이라, 오늘 표의 "무엇을 꽂나 / 담당"만 확실하면 된다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/architecture/cri/">공식 문서: Container Runtime Interface (CRI)</a> ·
+<a href="https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/network-plugins/">Network Plugins (CNI)</a> ·
+<a href="https://kubernetes.io/docs/concepts/storage/volumes/#csi">CSI</a> —
+<a href="https://kubernetes.io/blog/2022/02/17/dockershim-faq/">Dockershim Removal FAQ</a> 는 Q2 의 원전.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "OCI 는 CRI 랑 뭐가 다르지?", "Cilium 의 eBPF 가 뭐지?",
+"static Pod 는 어느 인터페이스로 뜨지?" — 전부 CKA 로 이어지는 좋은 실이다.
+</div>
+
+<nav class="nav">
+  <a href="0011-storage-pv-pvc.html">← 0011 스토리지</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

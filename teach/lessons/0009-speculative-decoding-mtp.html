@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 9 — MTP / Speculative Decoding</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .flow { font-family:"SF Mono",Menlo,monospace; font-size:0.8rem; background:#f8fafc; border:1px solid var(--rule); border-radius:8px; padding:0.9rem 1.1rem; margin:1rem 0; line-height:1.55; white-space:pre; overflow-x:auto; }
+  .draft { background:var(--accent-soft); border-radius:4px; padding:0.05rem 0.35rem; font-family:"SF Mono",Menlo,monospace; font-size:0.8rem; }
+  .ok { color:#166534; font-weight:700; }
+  .no { color:#991b1b; font-weight:700; }
+  h2 .n { color:var(--accent); font-family:system-ui,sans-serif; font-size:0.9rem; margin-right:0.4rem; }
+  table.cmp { border-collapse:collapse; width:100%; font-size:0.88rem; margin:1rem 0; }
+  table.cmp th, table.cmp td { border:1px solid var(--rule); padding:0.45rem 0.6rem; text-align:left; vertical-align:top; }
+  table.cmp th { background:#f8fafc; font-family:system-ui,sans-serif; font-size:0.78rem; }
+</style>
+</head>
+<body>
+
+<p class="kicker">Lesson 09 · Phase 2 — The Knobs · (Sionic 간판)</p>
+<h1>MTP / Speculative Decoding</h1>
+<p class="subtitle">가중치를 한 번 읽고 토큰을 여러 개 확정한다. Sionic이 ~100 → ~600 tok/s를 만든 알고리즘적 돌파구 — 그리고 그 큰 숫자를 우리 손으로 계산한다.</p>
+
+<div class="callout key">
+  <span class="label">이번 레슨의 단 하나의 승리</span>
+  "가중치 1회 읽기당 토큰 여러 개"라는 아이디어를 이해하고, <strong>acceptance length</strong> 하나로
+  Sionic 글의 <strong>6.65 → 1.9 → 0.67 GB/토큰</strong>을 직접 계산한다. 그리고 이게 양자화와 달리
+  <strong>품질을 훼손하지 않는(lossless)</strong> 이유를 안다.
+</div>
+
+<h2><span class="n">1</span>다시, 낭비의 근원 (L1)</h2>
+<p>
+<a href="0001-why-inference-is-memory-bound.html">Lesson 1</a>: 디코드는 <strong>토큰 하나</strong>를 만들려고 <strong>가중치 전체</strong>를 읽는다.
+읽는 데 대부분의 시간이 가고(메모리 바운드), 계산 유닛은 논다. <a href="0004-batching-throughput-vs-memory.html">배칭(L4)</a>은 그 읽기를
+<em>여러 사용자</em>가 나눠 쓰게 했다. 이번엔 다른 각도다:
+</p>
+<div class="callout"><span class="label">질문</span>
+  이미 가중치를 다 읽어왔는데, <strong>같은 한 번의 읽기로 한 사용자의 토큰을 여러 개</strong> 만들 순 없을까?
+</div>
+
+<h2><span class="n">2</span>Draft-then-Verify: 추측하고 검증한다</h2>
+<p><strong>Speculative decoding</strong>의 핵심은 두 역할로 나누는 것이다:</p>
+<ul>
+  <li><strong>Draft(초안)</strong>: 작고 빠른 예측기가 다음 <strong>K개 토큰을 후딱 추측</strong>한다 (싸다).</li>
+  <li><strong>Verify(검증)</strong>: 큰 모델이 그 K개를 <strong>단 한 번의 forward pass로 한꺼번에 검증</strong>하고, 자기 예측과 맞는 것만 받아들인다.</li>
+</ul>
+<div class="flow">초안:  큰모델이 "The cat sat on the ___" 다음을
+       draft가 추측 → <span class="draft">[mat] [and] [slept]</span>   (3개 한 번에 제안)
+
+검증:  큰모델이 이 3개를 <b>한 번의 pass로 병렬 확인</b>
+       [mat] <span class="ok">✓</span>  [and] <span class="ok">✓</span>  [slept] <span class="no">✗</span>  → 앞 2개 확정 + 큰모델의 진짜 다음 토큰 1개
+       → 가중치 <b>1회 읽기로 토큰 3개 전진</b> (2 확정 + 1 보정)</div>
+
+<div class="callout key">
+  <span class="label">왜 검증이 싼가 — L5의 그 원리</span>
+  제안된 K개를 검증하는 건 <strong>모든 위치를 한 번에 계산하는 병렬 pass</strong>다 —
+  <a href="0002-decode-loop-and-kv-cache.html">프리필</a>과 똑같이 <strong>compute-bound</strong>. 즉 <em>가중치는 한 번만 읽고(비싼 것 1회)</em>, 계산(싼 것)만 K배.
+  Lesson 1에서 계산은 메모리보다 940배 쌌던 걸 기억하라 — 그래서 K개 검증이 거의 공짜다.
+</div>
+
+<h2><span class="n">3</span>품질을 훼손하지 않는다 (lossless) — 양자화와의 결정적 차이</h2>
+<p>
+검증 규칙(각 초안 토큰을 <span class="mono">min(1, p/q)</span> 확률로 수락)은 수학적으로
+<strong>최종 출력이 "큰 모델 혼자 디코딩했을 때와 완전히 동일한" 분포</strong>가 되도록 보장한다<sup class="cite">[1]</sup>.
+</p>
+<div class="callout">
+  <span class="label">핵심 대비</span>
+  <strong>양자화(L6)</strong>는 빠른 대신 <em>품질을 조금 내준다</em>(lossy). <strong>Speculative/MTP는 빠르면서 품질이 그대로다</strong>(lossless).
+  틀린 초안은 검증에서 버려지므로, 초안이 나빠도 <em>느려질 뿐 틀리지 않는다.</em>
+</div>
+
+<h2><span class="n">4</span>MTP: 초안 모델을 따로 두지 않는다</h2>
+<p>
+<strong>Multi-Token Prediction</strong>은 <em>별도의 draft 모델 없이</em>, 큰 모델 자신에게 <strong>미래 토큰을 예측하는 추가 헤드 몇 개</strong>를 달아
+그 출력을 초안으로 쓴다(self-speculation)<sup class="cite">[2]</sup>. GLM·DeepSeek·Gemma 등이 이 방식. 그래서 GLM-5.2 글이 "MTP"라 부른다.
+</p>
+
+<h2><span class="n">5</span>초안은 어디서, 어떻게 나오나 (Q&amp;A에서)</h2>
+
+<h3>5a. "작고 빠른 예측기"는 LLM 안에 있나, 밖에 있나 → 방식에 따라 둘 다</h3>
+<table class="cmp">
+  <tr><th></th><th>draft는 어디에</th><th>추가 비용</th></tr>
+  <tr><td><strong>고전 spec. decoding</strong><sup class="cite">[1]</sup></td><td><strong>밖</strong> — 별도의 작은 모델 (예: 70B 옆에 1B)</td><td>작은 모델의 가중치 + KV 캐시 메모리 (L2/L4의 배치 상한을 갉아먹음); 토크나이저·분포도 맞아야 함</td></tr>
+  <tr><td><strong>MTP</strong> (GLM·DeepSeek)</td><td><strong>안</strong> — 몸통(80층)에 붙은 <em>추가 예측 헤드</em></td><td>거의 없음 — 얇은 헤드 몇 개; 몸통의 문맥 이해를 공유해 초안 품질도 좋음</td></tr>
+</table>
+<div class="flow">토큰 → 몸통 80층 (L7) → 최종 벡터 ─┬→ 기존 헤드:   t+1 예측   ← 원래 있던 것
+                                  ├→ MTP 헤드 1:  t+2 예측   ← 추가
+                                  └→ MTP 헤드 2:  t+3 예측   ← 추가</div>
+<p>즉 MTP의 예측기는 <strong>별도의 뇌가 아니라, 같은 뇌에 달린 추가 출력구</strong>다 — 그래서 self-speculation.</p>
+
+<h3>5b. t+2를 찍으려면 t+1을 모르는데? → 두 가지 설계</h3>
+<ul>
+  <li><strong>병렬형</strong> (Medusa, 원조 MTP 논문<sup class="cite">[2]</sup>): 각 헤드가 <strong>같은 최종 벡터에서 t+1·t+2·t+3를 독립적으로</strong> 찍는다.
+  가능한 이유 — 최종 벡터는 "다음 토큰 하나"가 아니라 <strong>문맥의 궤적 전체</strong>를 담고 있다(L7).
+  단, 멀수록 정확도↓.</li>
+  <li><strong>연쇄형</strong> (DeepSeek-V3·GLM 계열): 초안 생성도 작게 자기회귀를 돈다 — 단 <strong>진짜 t+1 대신 "자기가 방금 찍은 t+1"을 조건으로</strong>,
+  스텝당 비용은 몸통 80층이 아니라 <strong>얇은 MTP 모듈 1개</strong>. 그래서 초안이 싸다.</li>
+</ul>
+<div class="flow">연쇄형:  몸통 80층 → 최종 벡터 → t+1 초안 확정
+        [최종 벡터 + t+1 초안의 임베딩] → MTP 모듈(얇은 1층) → t+2 초안
+        [그 출력  + t+2 초안의 임베딩] → 같은 MTP 모듈       → t+3 초안</div>
+
+<h3>5c. 둘 다 성립하는 이유 — 틀려도 검증이 잘라낸다</h3>
+<div class="flow">초안:   <span class="draft">[mat] [and] [slept]</span>
+검증:   [mat] <span class="ok">✓</span>  [and] <span class="no">✗</span>  → 첫 불일치에서 그 뒤는 <b>볼 것도 없이 폐기</b>
+확정:   [mat] + 큰 모델의 진짜 다음 토큰</div>
+<div class="callout key">
+  <span class="label">이 설계의 정수</span>
+  초안은 <strong>맞을 필요가 없고, 자주 맞기만 하면 된다.</strong> t+1 추측이 틀리면 그 위에 쌓은 t+2는 어차피 같이 버려진다 —
+  맹찍기의 대가는 <em>틀림이 아니라 느려짐</em>(acceptance length↓)뿐이다 (§3의 lossless 안전망).
+  그리고 <strong>검증에는 이 문제가 없다</strong>: 초안 토큰들이 이미 주어져 있으니 프리필처럼 모든 위치를 병렬 계산 —
+  <em>"생성은 순차, 검증은 병렬"</em>인 이유.
+</div>
+
+<h2><span class="n">6</span>Sionic의 숫자를 직접 계산하자</h2>
+<p>딱 하나의 지표가 이득을 정한다 — <strong>acceptance length</strong>: 큰 모델 pass 1회당 <em>평균 몇 토큰이 확정되나</em>.</p>
+<div class="callout"><span class="label">공식</span>
+  <span class="mono">토큰당 가중치 바이트 = (pass 1회에 읽는 가중치) ÷ (acceptance length)</span>
+</div>
+<p>GLM-5.2는 <a href="../reference/glossary.html">MoE</a>라 pass 1회에 활성 전문가 <strong>6.65 GB</strong>를 읽는다(글의 값). 그럼:</p>
+<div class="calc">
+  <table>
+    <tr><td>MTP 없음 (acceptance = 1)</td><td>6.65 ÷ 1 = <strong>6.65 GB/토큰</strong></td></tr>
+    <tr><td>MTP (acceptance ≈ 3.5)</td><td>6.65 ÷ 3.5 ≈ <strong>1.9 GB/토큰</strong></td></tr>
+    <tr class="result"><td>MTP (acceptance ≈ 10)</td><td>6.65 ÷ 10 ≈ <strong>0.67 GB/토큰</strong></td></tr>
+  </table>
+</div>
+<p>
+글에 나온 <strong>6.65 → 1.9 → 0.67 GB/토큰</strong>이 정확히 이것이다. 토큰당 읽는 바이트가 줄면
+<a href="0001-why-inference-is-memory-bound.html">L1 공식</a>대로 토큰당 시간이 줄어 → 글의 <strong>~100 → ~600 tok/s</strong>가 나온다.
+<em>당신은 이제 그 간판 숫자를 스스로 유도할 수 있다.</em>
+</p>
+
+<h2><span class="n">7</span>공짜는 아니다 — 양자화와의 얽힘 (L6 회수)</h2>
+<p>
+이득은 전적으로 <strong>acceptance length</strong>에 달렸고, 그건 초안이 얼마나 자주 맞느냐다. 여기서 L6의 떡밥이 회수된다:
+</p>
+<ul>
+  <li><strong>양자화 정확도 저하 → 초안 품질↓ → acceptance length↓ → 오히려 처리량↓.</strong> Sionic이 경고한 바로 그 얽힘<sup class="cite">[3]</sup>.</li>
+  <li><strong>워크로드</strong>가 좌우: 코드·반복 텍스트는 예측 쉬워 acceptance↑, 무작위·창의적 텍스트는↓.</li>
+  <li><strong>temperature·수락 임계값</strong> 튜닝으로 품질을 지키며 acceptance를 최대화 — 글의 "MTP 파라미터 튜닝" 층.</li>
+</ul>
+<div class="callout">
+  <span class="label">Sionic 3층 최적화와의 연결</span>
+  이제 글의 구조가 보인다: ⓐ <strong>MTP 파라미터 튜닝</strong>(이 레슨) → ⓑ 런타임(SGLang 패치) → ⓒ 커널. 그리고 이 모두가
+  <em>양자화·acceptance가 수치적으로 얽혀</em> 조율돼야 한다는 것. Phase 3·4에서 ⓑⓒ로 내려간다.
+</div>
+
+<div class="quiz" data-answer="2">
+  <div class="q">Speculative decoding / MTP가 속도를 얻는 핵심 원리는?</div>
+  <button class="opt">가중치를 더 낮은 정밀도로 저장해 읽는 양을 줄여서</button>
+  <button class="opt">여러 사용자를 한 배치로 묶어 읽기를 분담해서</button>
+  <button class="opt">가중치 1회 읽기로 여러 토큰을 싼 병렬 검증으로 확정해서</button>
+  <button class="opt">KV 캐시를 페이지 단위로 나눠 메모리를 아껴서</button>
+  <div class="feedback"
+       data-correct="정확하다. 초안을 큰 모델이 1회 pass(compute-bound, 쌈)로 검증 → 한 번의 가중치 읽기로 여러 토큰 전진. 이득은 acceptance length에 비례."
+       data-wrong="그건 각각 양자화(L6)·배칭(L4)·PagedAttention이다. 스펙decoding은 '1회 읽기로 여러 토큰을 병렬 검증해 확정'하는 것."></div>
+</div>
+
+<div class="callout">
+  <span class="label">스스로 확인 (retrieval practice)</span>
+  종이를 덮고: ⑴ 검증 pass가 싼 이유는(어떤 바운드)? ⑵ acceptance length가 5면 6.65GB/pass 모델의 토큰당 바이트는?
+  ⑶ 양자화가 MTP 처리량을 낮출 수 있는 경로는? ⑷ 스펙decoding이 lossless인 이유는?
+  ⑸ t+2 초안은 t+1을 모르는데 어떻게 가능한가 (두 설계 + 안전망)?
+</div>
+
+<h2>가장 먼저 읽을 자료 (primary source)</h2>
+<p>
+BentoML, <a href="https://bentoml.com/llm/inference-optimization/speculative-decoding"><em>Speculative decoding</em></a> (실무 개괄) ·
+NVIDIA, <a href="https://developer.nvidia.com/blog/an-introduction-to-speculative-decoding-for-reducing-latency-in-ai-inference/"><em>Intro to Speculative Decoding</em></a>.
+원리는 Leviathan et al., <a href="https://arxiv.org/abs/2211.17192"><em>Fast Inference via Speculative Decoding</em></a>.
+</p>
+
+<div class="ask">
+  🧑‍🏫 <strong>막히면 바로 물어보세요.</strong> "min(1,p/q) 수락 규칙이 왜 분포를 보존해?", "MTP 헤드는 어떻게 학습돼?",
+  "첫 불일치에서 자르는데 acceptance가 어떻게 3.5·10씩 나와?", "EAGLE·Medusa는 뭐가 달라?", "acceptance length를 실측하려면 뭘 재?"
+</div>
+
+<hr>
+<p class="refs"><strong>References</strong></p>
+<ol class="refs">
+  <li>[1] Leviathan et al., <a href="https://arxiv.org/abs/2211.17192">Fast Inference from Transformers via Speculative Decoding</a>, 2022.</li>
+  <li>[2] Gloeckle et al., <a href="https://arxiv.org/abs/2404.19737">Better &amp; Faster LLMs via Multi-token Prediction</a>, 2024.</li>
+  <li>[3] Sionic AI, <a href="https://blog.sionic.ai/glm-5-2-x10">GLM-5.2 x10</a> (양자화↔acceptance 얽힘, 6.65/1.9/0.67).</li>
+</ol>
+
+<div class="lesson-nav">
+  <span><a href="0006-quantization.html">← Lesson 6 (양자화)</a></span>
+  <span><a href="../index.html">🏠 Hub</a> · <a href="../reference/glossary.html">Glossary</a> · Next: MoE (예정)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

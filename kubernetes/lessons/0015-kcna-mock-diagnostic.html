@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0015 — KCNA 전 도메인 모의 진단</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0015 <span class="tag">모의 진단 · 전 도메인</span></p>
+<h1>KCNA 전 도메인 모의 진단</h1>
+<p class="subtitle">18문항, 다섯 도메인을 실제 비중대로 섞었다. 정답률보다 <em>어느 도메인에서 흔들리는지</em>가 산출물 — 그 칸만 다시 보고 응시 일정을 잡는다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> 0001~0014 를 한 판에 모아, 남은 갭이 있는지 확인한다. <b>16개 이상이면 응시 준비 완료</b> 신호.
+찍지 말 것 — 헷갈린 문항은 헷갈린 채로 두는 게 진단에 이롭다. 문항 옆 괄호는 관련 레슨.
+</div>
+
+<div class="note">배점 비중: Fundamentals 8 · Orchestration 4 · Architecture 3 · Observability 2 · Delivery 1 (실제 KCNA 도메인 비중을 반영). 다 풀고 <b>도메인별로</b> 틀린 개수를 세보면 약한 칸이 드러난다.</div>
+
+<h2>1. Kubernetes Fundamentals (~46%)</h2>
+
+<div class="quiz">
+  <p class="q">Q1. (0002) Deployment 를 만들면 Pod 가 생긴다. 그 사이에 자동으로 끼는 리소스는?</p>
+  <div class="opts">
+    <button class="opt">StatefulSet</button>
+    <button class="opt" data-correct="true">ReplicaSet</button>
+    <button class="opt">DaemonSet</button>
+  </div>
+  <div class="explain">Deployment → ReplicaSet → Pod. 롤링 업데이트는 새 ReplicaSet 을 만들어 Pod 를 옮기는 방식이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. (0003) Pod 는 죽고 새로 태어나며 IP 가 계속 바뀌는데도 Service(ClusterIP) 주소가 안 바뀌는 이유는?</p>
+  <div class="opts">
+    <button class="opt">Service 가 각 Pod 에 고정 IP 를 예약해 주기 때문</button>
+    <button class="opt" data-correct="true">Service 는 label selector 로 살아있는 Pod 집합(EndpointSlice)을 가리킬 뿐, 자신은 고정된 접점이기 때문</button>
+    <button class="opt">Pod IP 가 사실은 재생성돼도 바뀌지 않기 때문</button>
+  </div>
+  <div class="explain">Service 의 ClusterIP 는 안정적 접점, 실제 대상 Pod 목록은 EndpointSlice 가 관리한다. Pod 가 바뀌면 목록만 갱신된다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (0004) liveness probe 와 readiness probe 의 차이로 옳은 것은?</p>
+  <div class="opts">
+    <button class="opt">둘 다 실패하면 컨테이너를 재시작한다</button>
+    <button class="opt" data-correct="true">readiness 실패는 Service 대상에서 빼기만 하고, liveness 실패는 컨테이너를 재시작한다</button>
+    <button class="opt">liveness 는 트래픽에서 빼고, readiness 는 재시작한다</button>
+  </div>
+  <div class="explain">readiness = "지금 트래픽 받을 수 있나"(과녁에서 빼고 넣기), liveness = "살아있나, 아니면 재시작"(RESTARTS 증가).</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q4. (0005) ConfigMap 을 <b>환경변수(env)</b>로 주입한 Pod 에서, ConfigMap 값을 수정하면?</p>
+  <div class="opts">
+    <button class="opt">실행 중인 Pod 의 env 값이 즉시 바뀐다</button>
+    <button class="opt" data-correct="true">이미 뜬 Pod 의 env 는 안 바뀐다 — Pod 를 다시 만들어야 반영된다</button>
+    <button class="opt">ConfigMap 은 env 로 주입할 수 없다</button>
+  </div>
+  <div class="explain">env 주입은 컨테이너 시작 시 한 번 값을 굳힌다. volume 주입은 파일이 갱신되지만, env 는 재생성이 필요하다 — 둘의 결정적 차이.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q5. (0006) 컨테이너가 <b>Exit Code 137 (OOMKilled)</b> 로 죽었다. 직접 원인은?</p>
+  <div class="opts">
+    <button class="opt">requests 로 예약한 CPU 가 부족해서</button>
+    <button class="opt" data-correct="true">메모리 사용이 limits 를 넘어 커널이 강제 종료해서</button>
+    <button class="opt">노드에 스케줄될 자리가 없어서 (Pending)</button>
+  </div>
+  <div class="explain">limits 는 단속선 — 메모리 limit 초과 시 OOMKill(137). requests 부족은 스케줄 단계의 Pending 문제로, 죽는 게 아니라 못 뜨는 것이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q6. (0009) 안정적 이름(<code>web-0</code>, <code>web-1</code>)과 순서 있는 생성이 필요한 워크로드는?</p>
+  <div class="opts">
+    <button class="opt">Deployment — 복제본은 서로 바꿔도 되므로</button>
+    <button class="opt" data-correct="true">StatefulSet — 각 Pod 가 고유 신원과 순서를 가짐</button>
+    <button class="opt">Job — 완료되면 끝나므로</button>
+  </div>
+  <div class="explain">Deployment 는 "서로 바꿔도 되는 복제본"을 가정한다. 그 가정이 깨질 때(고유 신원) StatefulSet 을 쓴다 — 지우고 살려도 같은 이름으로 부활.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q7. (0011) PVC 를 만들었더니 <code>Pending</code> 이다. kind 기본 StorageClass 환경에서 이게 정상인 이유는?</p>
+  <div class="opts">
+    <button class="opt">스토리지가 고장 나 영원히 안 붙는다</button>
+    <button class="opt" data-correct="true"><code>WaitForFirstConsumer</code> — Pod 가 실제로 마운트할 때까지 PV 생성을 미루기 때문</button>
+    <button class="opt">PV 를 관리자가 손으로 만들어 줘야 하기 때문</button>
+  </div>
+  <div class="explain">동적 프로비저닝 + WaitForFirstConsumer 는 소비자(Pod)가 나타날 때 PV 를 찍어낸다. Pod 를 붙이면 Bound 로 바뀐다 — LoadBalancer 의 영원한 <code>&lt;pending&gt;</code> 과는 다르다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q8. (0008) namespace <code>lab</code> 에 만든 Role + RoleBinding 으로 <code>get pods</code> 가 허용됐다. 같은 SA 로 <code>get pods -n default</code> 는?</p>
+  <div class="opts">
+    <button class="opt">허용된다 — 한 번 부여하면 전 namespace 에 적용</button>
+    <button class="opt" data-correct="true">거부된다 — Role 은 자신의 namespace 안에만 갇히기 때문</button>
+    <button class="opt">거부된다 — get 은 원래 RBAC 으로 부여 못 하는 동사</button>
+  </div>
+  <div class="explain">Role/RoleBinding 은 namespace 경계 안에서만 유효하다. 전 namespace 나 클러스터 자원엔 ClusterRole 이 필요하다.</div>
+</div>
+
+<h2>2. Container Orchestration (~22%)</h2>
+
+<div class="quiz">
+  <p class="q">Q9. (0012) 노드에서 <code>get nodes -o wide</code> 를 보니 <code>CONTAINER-RUNTIME</code> 이 <code>containerd</code> 다. kubelet 이 컨테이너를 실행할 때 거치는 표준 인터페이스는?</p>
+  <div class="opts">
+    <button class="opt" data-correct="true">CRI (Container Runtime Interface)</button>
+    <button class="opt">CNI (Container Network Interface)</button>
+    <button class="opt">CSI (Container Storage Interface)</button>
+  </div>
+  <div class="explain">CRI = 실행, CNI = 네트워크, CSI = 스토리지. kubelet 은 CRI 를 통해 containerd 같은 런타임에 실행을 위임한다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q10. (0013) Pod 에 진짜 네트워크 인터페이스와 IP 를 만들어 주는 것은?</p>
+  <div class="opts">
+    <button class="opt">kube-proxy</button>
+    <button class="opt" data-correct="true">CNI 플러그인 (kindnet/Calico 등)</button>
+    <button class="opt">CoreDNS</button>
+  </div>
+  <div class="explain">CNI 가 Pod 네트워크(실제 인터페이스+IP)의 도로를 깐다. kube-proxy 는 그 위에 Service 바꿔치기 규칙(이정표)을 세울 뿐이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q11. (0013) 클러스터 안에서 ClusterIP 로 <code>ping</code> 은 안 되는데 <code>curl</code> 은 된다. 이유는?</p>
+  <div class="opts">
+    <button class="opt">보안상 ICMP 가 기본 차단돼 있어서</button>
+    <button class="opt" data-correct="true">ClusterIP 는 실체 없는 가상 주소고, kube-proxy 의 DNAT 규칙이 정의된 TCP 포트에만 걸려서</button>
+    <button class="opt">CNI 가 ping 을 지원하지 않는 경량 버전이라서</button>
+  </div>
+  <div class="explain">ClusterIP 는 어떤 인터페이스에도 없다. curl 이 되는 건 목적지가 노드를 떠나기 전에 진짜 Pod IP 로 DNAT 되기 때문 — 그 규칙은 Service 포트에만 있으므로 ICMP 는 허공으로 간다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q12. (0007) "현재 상태를 원하는 상태로 수렴시키는" 제어 루프들이 실제로 도는 컴포넌트는?</p>
+  <div class="opts">
+    <button class="opt">kube-scheduler</button>
+    <button class="opt" data-correct="true">kube-controller-manager</button>
+    <button class="opt">kube-apiserver</button>
+  </div>
+  <div class="explain">scheduler 는 "어느 노드에" 한 번 정하고, apiserver 는 관문·저장 중계다. 실제 reconciliation 루프(ReplicaSet, Node, Job 컨트롤러 등)는 controller-manager 안에서 돈다.</div>
+</div>
+
+<h2>3. Cloud Native Architecture (~16%)</h2>
+
+<div class="quiz">
+  <p class="q">Q13. (0014) CNCF 프로젝트 성숙도를 <b>덜 성숙 → 더 성숙</b> 순으로 옳게 놓은 것은?</p>
+  <div class="opts">
+    <button class="opt">Graduated → Incubating → Sandbox</button>
+    <button class="opt" data-correct="true">Sandbox → Incubating → Graduated</button>
+    <button class="opt">Incubating → Sandbox → Graduated</button>
+  </div>
+  <div class="explain">Sandbox(실험) → Incubating(성장) → Graduated(프로덕션 검증). Kubernetes·Prometheus·Helm 은 graduated.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q14. (0014/0012) "Docker 를 지워도 컨테이너 <b>이미지</b>는 그대로 돈다"를 보장하는 열린 표준은?</p>
+  <div class="opts">
+    <button class="opt">CRI</button>
+    <button class="opt" data-correct="true">OCI (Open Container Initiative)</button>
+    <button class="opt">CNCF</button>
+  </div>
+  <div class="explain">OCI 는 컨테이너 이미지·런타임의 벤더 중립 표준이다. 그래서 런타임을 containerd 로 바꿔도 같은 이미지가 그대로 실행된다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q15. (0014/0005) 12-factor 원칙 "설정은 환경에" 는 쿠버네티스의 무엇으로 실현되나?</p>
+  <div class="opts">
+    <button class="opt">이미지 안에 설정 파일을 굽는다</button>
+    <button class="opt" data-correct="true">ConfigMap/Secret 을 env 나 volume 으로 주입한다</button>
+    <button class="opt">노드마다 다른 커널 파라미터로 설정한다</button>
+  </div>
+  <div class="explain">설정을 코드/이미지에서 분리해 환경별로 주입 — 같은 이미지를 dev/prod 에서 다르게 돌리는 0005 의 핵심이 곧 12-factor 의 config 원칙이다.</div>
+</div>
+
+<h2>4. Cloud Native Observability (~8%)</h2>
+
+<div class="quiz">
+  <p class="q">Q16. (0014) "요청 하나가 어떤 서비스들을 순서대로 거쳤는지" 경로를 보여주는 관측성 기둥은?</p>
+  <div class="opts">
+    <button class="opt">메트릭 (Metrics)</button>
+    <button class="opt">로그 (Logs)</button>
+    <button class="opt" data-correct="true">트레이스 (Traces)</button>
+  </div>
+  <div class="explain">메트릭=숫자, 로그=문장, 트레이스=지도. 마이크로서비스에서 요청 경로를 쫓으려면 트레이스(Jaeger/OpenTelemetry)가 필요하다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q17. (0014) Prometheus 가 메트릭을 모으는 방식은?</p>
+  <div class="opts">
+    <button class="opt">앱이 Prometheus 로 메트릭을 밀어 보낸다 (push)</button>
+    <button class="opt" data-correct="true">Prometheus 가 각 앱의 <code>/metrics</code> 를 주기적으로 긁어온다 (pull/scrape)</button>
+    <button class="opt">kubelet 이 메트릭을 etcd 에 저장한다</button>
+  </div>
+  <div class="explain">Prometheus 는 pull 방식 — 감시 대상만 등록하면 앱은 Prometheus 주소를 몰라도 된다. KCNA 는 "Prometheus=메트릭, pull" 수준이면 충분.</div>
+</div>
+
+<h2>5. Cloud Native Application Delivery (~8%)</h2>
+
+<div class="quiz">
+  <p class="q">Q18. (0014/0007) GitOps 의 핵심을 가장 잘 설명한 것은?</p>
+  <div class="opts">
+    <button class="opt">Git 에서 코드를 받아 CI 에서 테스트만 하는 것</button>
+    <button class="opt" data-correct="true">Git 을 "원하는 상태"의 유일한 진실로 삼고, 에이전트가 클러스터를 그 상태로 계속 맞추는(reconcile) 것</button>
+    <button class="opt">개발자가 <code>kubectl apply</code> 를 더 빨리 치도록 돕는 도구</button>
+  </div>
+  <div class="explain">GitOps 는 0007 의 제어 루프를 클러스터 밖으로 옮긴 것 — 원하는 상태가 etcd 대신 Git 에 있고, drift 가 생기면 되돌린다. ArgoCD/Flux 가 그 에이전트다.</div>
+</div>
+
+<hr>
+
+<h2>판정 — 도메인별로 세어보기</h2>
+
+<table class="cmp">
+<tr><th>맞힌 개수 (18 중)</th><th>해석 / 다음 행동</th></tr>
+<tr><td><b>16~18</b></td><td>응시 준비 완료 신호. 틀린 1~2문항의 <b>도메인만</b> 해당 레슨으로 복습 → 실제 KCNA 예약.</td></tr>
+<tr><td><b>13~15</b></td><td>거의 다 왔다. 틀린 문항이 <b>몰린 도메인</b>을 찾아 그 레슨(괄호 번호)만 다시 → 1주 내 재모의.</td></tr>
+<tr><td><b>~12</b></td><td>특정 도메인이 통째로 약할 가능성. 그 칸을 실습까지 다시 밟고 나서 재응시 계획.</td></tr>
+</table>
+
+<div class="win">
+<b>다음:</b> 결과(총점 + <b>도메인별 틀린 문항</b>)를 알려주세요. 약한 칸이 보이면 그 레슨만 손보고,
+없으면 <b>KCNA 응시 일정</b>을 확정합니다 — <a href="../reference/kcna-gap-check.html">갭 체크</a>의 마지막 ⬜ 이 이 진단으로 닫힙니다.
+그 다음은 Level 2(<b>KCSA</b>) — 0013 에서 씨 뿌린 NetworkPolicy·4C 보안이 본격화됩니다.
+</div>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://github.com/cncf/curriculum">CNCF Curriculum (KCNA)</a> 로 도메인 비중을,
+<a href="https://www.cncf.io/training/certification/kcna/">KCNA 공식 페이지</a> 로 시험 정책·예약을 응시 직전에 재확인할 것.
+</div>
+
+<nav class="nav">
+  <a href="0014-cloud-native-vocabulary.html">← 0014 클라우드 네이티브 어휘</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

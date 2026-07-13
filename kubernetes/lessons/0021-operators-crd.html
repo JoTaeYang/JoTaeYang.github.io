@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0021 — Operator 패턴과 CRD: 쿠버네티스 API를 내 도메인으로 확장하기</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0021 <span class="tag">심화 · API 확장</span></p>
+<h1>Operator 패턴과 CRD</h1>
+<p class="subtitle">쿠버네티스에게 <b>새 리소스 종류(kind)를 가르치고</b>, 그것을 지켜보며 원하는 상태로 수렴시키는 <b>제어 루프(0007)</b>를 내 앱을 위해 쓴다. 이번엔 개념만이 아니라 — 작은 CRD 하나를 실제로 <code>kubectl apply</code> 해서 API가 확장되는 걸 눈으로 본다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> "<b>CRD가 API를 확장한다</b>, <b>Operator = CRD + 커스텀 컨트롤러</b> = 운영 지식을 코드로 인코딩한 것"을
+말로 설명할 수 있게 된다. 그리고 <b>0007의 제어 루프</b>, <b>0008의 RBAC</b>, <b>0010의 "규칙엔 컨트롤러가 필요"</b>,
+<b>0014의 Helm(day-1) vs 살아있는 자가치유(day-2)</b> — 이미 배운 네 조각이 하나로 꿰인다.
+</div>
+
+<h2>0. 한눈에 — 세 단어</h2>
+
+<div class="aha">
+<span class="label">딱 이 세 줄</span>
+<p><b>CRD</b> = API 서버에게 새 <b>명사(kind)</b>를 가르치는 것. <code>kind: CronTab</code> 을 등록하면 그 순간부터
+<code>kubectl get crontabs</code> 가 동작하고, etcd 저장·RBAC·label selector 가 <b>기본 리소스처럼</b> 붙는다.</p>
+<p><b>커스텀 컨트롤러</b> = 그 새 명사를 <b>watch 하며 원하는 상태로 수렴</b>시키는 제어 루프.
+바로 <b>0007</b>의 reconciliation 을 "내 앱을 위해" 쓴 것 — kube-controller-manager 의 내장 컨트롤러들과 <b>같은 골격</b>이다.</p>
+<p><b>Operator</b> = CRD + 컨트롤러 + 특정 앱의 <b>"운영 지식"</b>(백업·페일오버·업그레이드·스케일)을 코드로 인코딩한 것.
+사람 운영자(operator)가 하던 <b>day-2</b> 작업을 자동화한다.</p>
+</div>
+
+<h2>1. CRD — API 서버에게 새 명사를 가르친다</h2>
+
+<p>지금까지 쓴 <code>Pod</code>, <code>Deployment</code>, <code>Service</code> 는 전부 쿠버네티스가 <b>미리 아는 kind</b> 였다.
+<b>CustomResourceDefinition(CRD)</b> 은 여기에 내가 정의한 새 kind — 예: <code>CronTab</code>, <code>PostgresCluster</code>, <code>Certificate</code> —
+를 <b>런타임에 추가</b>한다. 등록하는 순간 API 서버는 그 kind 에 대한 REST 엔드포인트를 열어 준다.</p>
+
+<div class="aha">
+<span class="label">아하 — "내 도메인 언어로 API를 확장"</span>
+CRD를 apply 하면 그 kind 는 <b>1급 시민</b>이 된다: <code>kubectl get postgresclusters</code> 가 동작하고,
+매니페스트는 <b>etcd에 저장</b>되며(0007의 그 etcd), <b>0008의 RBAC</b>이 그대로 적용되고(<code>Role</code> 의 <code>resources</code> 에 새 리소스명을 넣으면 됨),
+<code>label selector</code>·<code>kubectl describe</code>·<code>-o yaml</code> 이 전부 기본 리소스와 똑같이 붙는다.
+쿠버네티스 API 표면을 통째로 물려받는 것.
+</div>
+
+<table class="cmp">
+<tr><th>이 조각</th><th>새 커스텀 리소스에도 그대로 적용?</th><th>연결</th></tr>
+<tr><td>etcd 저장·declarative apply</td><td>✅ 자동</td><td>0007 API server → etcd</td></tr>
+<tr><td>RBAC (누가 이 리소스를 만질 수 있나)</td><td>✅ <code>Role</code> 에 리소스명만 추가</td><td>0008 Role/RoleBinding</td></tr>
+<tr><td><code>kubectl get/describe/-o yaml</code></td><td>✅ 자동</td><td>기본 리소스와 동일</td></tr>
+<tr><td>label selector / namespace 스코프</td><td>✅ CRD에서 <code>scope</code> 선택</td><td>기본 리소스와 동일</td></tr>
+<tr><td><b>실제로 뭔가 일어나게 하는 동작</b></td><td>❌ <b>컨트롤러가 별도로 필요</b></td><td>2절 · 3절</td></tr>
+</table>
+
+<h2>2. 커스텀 컨트롤러 — 0007의 제어 루프를 내 앱에</h2>
+
+<p>CRD만으로는 <b>모양만 생긴다</b>. 그 리소스를 지켜보며 실제 세계를 그 선언에 맞춰 바꾸는 주체가 <b>컨트롤러</b>다.
+그 동작은 <b>0007에서 배운 그 제어 루프</b>와 한 글자도 다르지 않다:</p>
+
+<div class="aha">
+<span class="label">아하 — 같은 골격, 다른 대상</span>
+kube-controller-manager 안의 Deployment 컨트롤러는 "<code>replicas: 3</code> 인데 지금 2개 → 하나 더" 를 무한 반복한다.
+커스텀 컨트롤러는 똑같이 "<code>PostgresCluster</code> 가 <code>replicas: 3, version: 15</code> 라는데 지금 상태와 다르네 → 맞춘다" 를 반복한다.
+<b>watch → 현재 상태와 원하는 상태 비교 → 좁힌다(reconcile)</b> — 이 루프가 전부다.
+그래서 커스텀 컨트롤러는 "kube-controller-manager 의 내장 컨트롤러를 내 도메인용으로 하나 더 쓴 것"이라고 보면 정확하다.
+</div>
+
+<div class="note">컨트롤러는 클러스터 안에서 보통 <b>Deployment로 도는 하나의 Pod</b>다. 그 Pod가 API server의 watch 스트림을
+구독하고, 커스텀 리소스가 생기거나 바뀌면 reconcile 함수를 실행한다. 특별한 마법이 아니라 — 여러분이 지금까지 본
+<code>-n kube-system</code> 의 컨트롤러들과 똑같은 방식으로 도는, 그냥 <b>또 하나의 컨트롤러</b>다.</div>
+
+<h2>3. Operator = CRD + 컨트롤러 + 운영 지식(day-2)</h2>
+
+<p><b>Operator</b> 는 이 둘(CRD + 컨트롤러)에 더해, <b>특정 앱을 운영하는 사람의 노하우</b>를 코드로 담은 것이다.
+DB를 예로 들면 사람 운영자가 손으로 하던 일 — 백업 스케줄, 리더 장애 시 페일오버, 무중단 버전 업그레이드, 안전한 스케일 —
+을 reconcile 루프 안에 인코딩한다. 그래서 이름이 <b>Operator(운영자)</b>다.</p>
+
+<table class="cmp">
+<tr><th>구분</th><th>Helm (0014)</th><th>Operator</th></tr>
+<tr><td>언제 일하나</td><td><b>day-1</b> — 설치·업그레이드 <b>시점</b>에 한 번</td><td><b>day-2</b> — 설치 후 <b>계속 살아서</b> 감시</td></tr>
+<tr><td>하는 일</td><td>템플릿 YAML을 <b>한 번 펼쳐(render)</b> apply</td><td>watch 하며 <b>drift 교정·자가치유</b></td></tr>
+<tr><td>장애가 나면</td><td>스스로 못 고침 (사람이 다시 <code>helm upgrade</code>)</td><td>reconcile 이 감지해 <b>스스로 복구</b></td></tr>
+<tr><td>운영 지식</td><td>거의 없음 (설치 편의)</td><td>백업·페일오버·업그레이드를 <b>코드로</b></td></tr>
+<tr><td>비유</td><td>apt/brew로 <b>설치</b></td><td>24시간 대기하는 <b>자동 운영 엔지니어</b></td></tr>
+</table>
+
+<div class="aha">
+<span class="label">한 줄 대비</span>
+<b>Helm은 사진 한 장(설치 순간의 상태)을 남기고 떠난다. Operator는 살아서 지켜본다.</b>
+Helm의 render는 0014에서 본 대로 <b>설치 시점의 펼침</b>이고, Operator의 reconcile은 0007/0014 GitOps처럼
+<b>끊임없이 현재를 원함에 맞추는</b> 살아있는 루프다. 둘은 배타적이지 않다 — Helm 차트로 Operator를 <b>설치</b>하는 조합도 흔하다.
+</div>
+
+<p>실제로 널리 쓰이는 Operator들: <b>Prometheus Operator</b>(모니터링 스택을 <code>kind: Prometheus</code>·<code>ServiceMonitor</code> 로 선언),
+<b>cert-manager</b>(<code>kind: Certificate</code> 를 선언하면 TLS 인증서를 발급·자동 갱신), 각종 <b>DB Operator</b>(Postgres·MySQL·Kafka…).
+전부 "그 앱의 운영 지식"을 CRD + 컨트롤러로 감싼 것이다.</p>
+
+<h2>4. "규칙만 있고 컨트롤러 없으면 무력" — 익숙한 그 패턴</h2>
+
+<div class="aha">
+<span class="label">아하 — 이미 두 번 본 구조다</span>
+CRD만 등록하고 <b>컨트롤러가 없으면</b>, 커스텀 리소스는 <b>etcd에 저장될 뿐 아무 일도 안 일어난다</b>.
+이건 새 규칙이 아니라 이 트랙을 관통하는 패턴이다:
+<ul>
+<li><b>0010 Ingress</b>: Ingress 규칙만 만들고 <b>Ingress 컨트롤러가 없으면</b> 라우팅이 안 된다 — 규칙엔 그걸 실현할 컨트롤러가 필요.</li>
+<li><b>0008 Role</b>: Role만 만들고 <b>RoleBinding이 없으면</b> 권한이 무력 — 규칙만으론 아무에게도 안 붙는다.</li>
+<li><b>여기 CRD</b>: kind만 등록하고 <b>컨트롤러가 없으면</b> 리소스는 그냥 저장된 데이터일 뿐.</li>
+</ul>
+세 경우 모두 "<b>선언(규칙)과 그것을 집행하는 주체(컨트롤러)는 별개</b>"라는 같은 골격이다.
+</div>
+
+<h2>5. 실습 — CRD 하나를 실제로 apply (kind 클러스터)</h2>
+
+<p>말로만 하지 말고 손으로 확인한다. <code>mastery/lab</code> 의 kind 클러스터에서 아주 작은 CRD를 등록하고,
+그 새 kind가 진짜로 API에 나타나는지 본다. <b>컨트롤러는 만들지 않는다</b> — 오히려 그게 4절의 "무력" 패턴을 눈으로 각인시킨다.</p>
+
+<p><b>5-1. CRD를 apply</b> — <code>apiextensions.k8s.io/v1</code> 스키마로 <code>CronTab</code> kind 정의:</p>
+
+<div class="cluster"><span class="ctx">terminal · kind 클러스터</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f - &lt;&lt;'EOF'
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: crontabs.stable.example.com    # 반드시 &lt;plural&gt;.&lt;group&gt; 형식
+spec:
+  group: stable.example.com
+  scope: Namespaced
+  names:
+    plural: crontabs
+    singular: crontab
+    kind: CronTab
+    shortNames: [ct]
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                cronSpec:
+                  type: string
+                image:
+                  type: string
+                replicas:
+                  type: integer
+EOF</span>
+<span class="out">customresourcedefinition.apiextensions.k8s.io/crontabs.stable.example.com created</span>
+</div>
+
+<div class="note"><b>이름 규칙 주의:</b> <code>metadata.name</code> 은 반드시 <code>&lt;plural&gt;.&lt;group&gt;</code> — 여기선 <code>crontabs.stable.example.com</code>.
+<code>served: true</code> = 이 버전을 API로 제공, <code>storage: true</code> = etcd에 이 버전으로 저장. 버전이 하나면 둘 다 true.
+<code>openAPIV3Schema</code> 는 커스텀 리소스의 <b>구조 검증 스키마</b> — 여기 없는 필드를 쓰면 API server가 거부한다(0007의 admission/validation 흐름).</div>
+
+<p><b>5-2. 새 kind가 API에 나타났는지 확인:</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get crd crontabs.stable.example.com</span>
+<span class="out">NAME                          CREATED AT
+crontabs.stable.example.com   2026-07-07T09:00:00Z</span>
+<span class="prompt">$</span> <span class="cmd">kubectl api-resources | grep crontab</span>   <span class="hl"># 이제 기본 리소스 목록에 등장</span>
+<span class="out">crontabs   ct   stable.example.com/v1   true   CronTab</span>
+</div>
+
+<p><b>5-3. 이제 그 kind의 인스턴스(커스텀 리소스)를 apply:</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f - &lt;&lt;'EOF'
+apiVersion: stable.example.com/v1
+kind: CronTab
+metadata:
+  name: my-first-crontab
+spec:
+  cronSpec: "*/5 * * * *"
+  image: busybox:1.36
+  replicas: 2
+EOF</span>
+<span class="out">crontab.stable.example.com/my-first-crontab created</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get crontab</span>            <span class="hl"># singular/plural/shortName 다 동작</span>
+<span class="out">NAME               AGE
+my-first-crontab   10s</span>
+<span class="prompt">$</span> <span class="cmd">kubectl describe ct my-first-crontab</span>   <span class="hl"># shortName 'ct'도, describe도 기본 리소스처럼</span>
+<span class="out">Name:         my-first-crontab
+API Version:  stable.example.com/v1
+Kind:         CronTab
+Spec:
+  Cron Spec:  */5 * * * *
+  Image:      busybox:1.36
+  Replicas:   2
+...</span>
+</div>
+
+<div class="warn">
+<b>여기서 멈춰서 보라 — 아무 일도 안 일어난다.</b>
+<code>replicas: 2</code> 라고 선언했지만 <b>Pod는 하나도 안 뜬다</b>. <code>kubectl get pods</code> 를 쳐도 비어 있다.
+왜? <b>이 kind를 watch하는 컨트롤러가 없기 때문</b>이다. 커스텀 리소스는 그저 <b>etcd에 저장된 구조화된 데이터</b>일 뿐 —
+누군가 그것을 읽고 실제 세계를 바꿔줘야 비로소 동작한다. 이것이 4절의 "규칙만 있고 컨트롤러 없으면 무력"(0010 Ingress, 0008 Role)과
+<b>정확히 같은 상황</b>이다. Operator를 설치했다면 바로 이 지점에서 그 컨트롤러가 Pod·CronJob 등을 만들어 냈을 것이다.
+</div>
+
+<p><b>5-4. 정리(cleanup):</b> CRD를 지우면 그 kind의 <b>모든 인스턴스도 함께 사라진다</b>.</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl delete crd crontabs.stable.example.com</span>
+<span class="out">customresourcedefinition.apiextensions.k8s.io "crontabs.stable.example.com" deleted</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get crontab</span>
+<span class="out">error: the server doesn't have a resource type "crontab"</span>   <span class="hl"># kind 자체가 API에서 사라짐 → 되돌리기 완료</span>
+</div>
+
+<div class="note"><b>실제 컨트롤러를 쓰려면?</b> 컨트롤러 코드는 보통 <b>Kubebuilder</b> 나 <b>Operator SDK</b> 로 골격을 생성해 Go(또는 Ansible/Helm 기반)로 reconcile 로직을 채운다.
+그건 이 트랙의 범위를 넘는 심화 — KCNA 수준에선 "Operator는 이런 도구로 만든다"는 <b>이름만</b> 알면 충분하다. 오늘의 핵심은 <b>API 확장 자체를 손으로 본 것</b>.</div>
+
+<h2>6. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. CRD를 apply해서 <code>kind: CronTab</code> 을 등록했다. 하지만 이 kind를 watch하는 컨트롤러는 배포하지 않았다. <code>kind: CronTab</code> 인스턴스를 apply하면?</p>
+  <div class="opts">
+    <button class="opt">API server가 컨트롤러 없음을 감지해 apply 자체를 거부한다</button>
+    <button class="opt" data-correct="true">etcd에 정상 저장되고 <code>kubectl get crontab</code> 으로 조회되지만, 실제로는 아무 동작도 일어나지 않는다</button>
+    <button class="opt">스케줄러가 기본 컨트롤러를 대신 붙여 Pod를 생성한다</button>
+  </div>
+  <div class="explain">CRD는 API 표면(저장·조회·RBAC)만 확장한다. 실제 동작은 그 kind를 watch하는 컨트롤러의 몫 — 없으면 리소스는 그저 저장된 데이터다. 0010 Ingress(규칙만 있고 컨트롤러 필요)·0008 Role(Binding 없으면 무력)과 같은 "선언과 집행은 별개" 패턴.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. Helm과 Operator의 가장 결정적인 차이는?</p>
+  <div class="opts">
+    <button class="opt">Helm은 YAML을, Operator는 JSON을 쓴다</button>
+    <button class="opt">Helm은 클러스터 안에서 돌고 Operator는 클러스터 밖에서 돈다</button>
+    <button class="opt" data-correct="true">Helm은 설치 시점(day-1)에 템플릿을 한 번 펼쳐 apply하고 떠나지만, Operator는 계속 살아서 watch하며 자가치유(day-2)한다</button>
+  </div>
+  <div class="explain">Helm은 0014에서 본 대로 설치·업그레이드 순간에 render해 apply하는 패키지 매니저 — 이후 스스로 고치지 못한다. Operator는 reconcile 루프(0007)로 계속 drift를 교정한다. "사진 한 장 vs 살아있는 운영 엔지니어".</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0007 복습) 커스텀 컨트롤러의 reconcile 루프가 kube-controller-manager 안의 Deployment 컨트롤러와 "같은 골격"이라는 말의 뜻은?</p>
+  <div class="opts">
+    <button class="opt">둘 다 etcd에 직접 읽고 쓰기 때문에 API server를 거치지 않는다</button>
+    <button class="opt" data-correct="true">둘 다 리소스를 watch → 현재 상태와 원하는 상태를 비교 → 차이를 좁힌다(reconcile)는 제어 루프를 무한 반복한다 (대상만 다름)</button>
+    <button class="opt">둘 다 스케줄러의 일부로서 노드 배치 결정을 내린다</button>
+  </div>
+  <div class="explain">0007의 제어 루프가 전부다: watch → desired vs actual 비교 → 좁힘. Deployment 컨트롤러는 replicas를, 커스텀 컨트롤러는 내 도메인 리소스를 대상으로 할 뿐 골격은 동일하다. 그래서 Operator는 "내 앱을 위한 컨트롤러를 하나 더 쓴 것". etcd 직접 접근이 아니라 API server의 watch로 상태를 본다(0007 Q2).</div>
+</div>
+
+<hr>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">이 주제는 조각이 많아 헷갈리기 쉽다. 궁금한 것만 펼쳐 보면 된다.</p>
+
+<details class="faq">
+<summary>CRD랑 커스텀 리소스(CR)는 같은 말인가요?</summary>
+<div class="a"><p>다르다. <b>CRD</b>(CustomResourceDefinition)는 "새 kind를 정의하는 <b>틀</b>"이고, <b>CR</b>(Custom Resource)은 그 틀로 찍어낸 <b>인스턴스</b>다. 실습으로 치면 <code>kind: CustomResourceDefinition</code>(5-1) 이 CRD, <code>kind: CronTab</code>(5-3) 이 CR. 클래스와 객체의 관계라고 보면 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Operator랑 컨트롤러는 같은 건가요?</summary>
+<div class="a"><p>Operator는 컨트롤러를 <b>포함</b>하는 더 큰 개념이다. <b>컨트롤러</b> = watch하며 reconcile하는 루프(0007). <b>Operator</b> = 그 컨트롤러 + CRD + <b>특정 앱의 운영 지식</b>(백업·페일오버·업그레이드)을 하나로 묶은 것. 그래서 "모든 Operator는 컨트롤러를 갖지만, 모든 컨트롤러가 Operator는 아니다" — 내장 Deployment 컨트롤러는 특정 앱 운영 지식이 없으니 Operator라 부르지 않는다.</p></div>
+</details>
+
+<details class="faq">
+<summary>왜 그냥 Deployment로 앱을 깔지 않고 Operator를 써요?</summary>
+<div class="a"><p>단순한 stateless 앱이면 Deployment로 충분하다. Operator가 빛나는 건 <b>운영이 복잡한 상태 저장 앱</b> — 예: Postgres 클러스터에서 리더가 죽으면 팔로워를 승격(페일오버)하고, 버전 업그레이드를 순서대로 무중단으로, 정기 백업을 뜬다. 이 "사람이 새벽에 깨서 하던 일"을 코드로 자동화한 게 Operator다. day-2 운영이 힘든 앱일수록 값어치가 크다.</p></div>
+</details>
+
+<details class="faq">
+<summary>day-1, day-2가 무슨 뜻이에요?</summary>
+<div class="a"><p>업계 용어다. <b>day-1</b> = 설치·초기 배포(한 번의 이벤트). <b>day-2</b> = 그 이후의 <b>지속적 운영</b> — 모니터링, 백업, 업그레이드, 장애 복구, 스케일. Helm은 day-1을 잘하고(설치), Operator는 day-2를 자동화한다(계속 돌봄). "설치는 쉽고 운영이 어렵다"는 통찰을 담은 구분이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>CRD를 등록하면 RBAC은 자동으로 되나요?</summary>
+<div class="a"><p>API 표면은 자동으로 생기지만, <b>권한은 명시해야 한다</b>. 0008의 <code>Role</code>/<code>ClusterRole</code> 의 <code>resources</code> 에 새 리소스명(예: <code>crontabs</code>)과 <code>apiGroups</code>(예: <code>stable.example.com</code>)를 넣어야 그 리소스를 만질 수 있다. 즉 커스텀 리소스도 <b>기본 리소스와 똑같이 RBAC이 걸린다</b> — 그래서 Operator를 설치하면 대개 자기 컨트롤러용 ServiceAccount와 Role이 함께 딸려 온다.</p></div>
+</details>
+
+<details class="faq">
+<summary>컨트롤러 없이 CRD만 있는 게 쓸모가 있나요?</summary>
+<div class="a"><p><b>있다.</b> 컨트롤러 없이도 CRD는 "<b>구조화된 설정을 API에 저장·조회</b>"하는 용도로 유용하다 — 예: 다른 도구가 읽어가는 설정 저장소, kubectl로 관리하는 앱별 메타데이터. 다만 "선언대로 실제 세계가 바뀌는" 자동화를 원하면 컨트롤러가 필요하다(5-3 warn). 실습에서 본 게 정확히 "컨트롤러 없는 CRD = 저장만 되는 상태"다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>served</code>와 <code>storage</code>가 뭐가 달라요?</summary>
+<div class="a"><p>CRD가 여러 <b>버전</b>(v1, v2beta1…)을 가질 때 쓴다. <code>served: true</code> = 그 버전을 API로 <b>제공</b>(클라이언트가 그 버전으로 읽고 쓸 수 있음). <code>storage: true</code> = etcd에 <b>실제로 저장</b>되는 버전(정확히 하나만 true여야 함). API server가 버전 간 변환을 해주므로, 여러 버전을 served로 열어두고 storage는 하나로 고정하는 식이다. 버전이 하나뿐이면 둘 다 true(실습 5-1).</p></div>
+</details>
+
+<details class="faq">
+<summary><code>openAPIV3Schema</code>는 꼭 써야 하나요?</summary>
+<div class="a"><p><code>apiextensions.k8s.io/v1</code>(현재 정식 버전)에서는 <b>필수</b>다. 이 스키마가 커스텀 리소스의 필드 구조와 타입을 검증한다 — 예: <code>replicas</code> 를 <code>integer</code> 로 선언하면 문자열을 넣었을 때 API server가 거부한다(0007의 validation 흐름). 스키마 없이 아무 필드나 받던 옛 <code>v1beta1</code> 은 폐기됐다. 즉 "이 kind는 이런 모양이어야 한다"를 강제하는 안전장치다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Prometheus Operator, cert-manager 같은 건 어떻게 설치해요?</summary>
+<div class="a"><p>대개 <b>Helm 차트나 매니페스트 한 번으로</b> 설치한다 — 그러면 CRD들과 컨트롤러 Deployment가 함께 깔린다. 여기서 재미있는 점: <b>Helm(0014)으로 Operator를 설치</b>하는 조합이다. Helm이 day-1(설치)을 하고, 설치된 Operator가 day-2(운영)를 맡는 — 둘이 배타적이지 않고 층을 이룬다. 설치 후엔 <code>kind: Certificate</code>, <code>kind: Prometheus</code> 같은 CR을 apply하며 쓴다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Operator를 직접 만들려면 뭘 배워야 하나요? (KCNA 범위 밖)</summary>
+<div class="a"><p>KCNA엔 안 나오지만 궁금하다면: <b>Kubebuilder</b> 나 <b>Operator SDK</b> 로 프로젝트 골격을 생성하고, <b>reconcile 함수</b>(0007 루프의 몸통)를 주로 Go로 채운다. "이 CR을 보면 실제 세계를 이렇게 맞춰라"를 코드로 쓰는 것. Helm/Ansible 기반으로 코드 없이 만드는 길도 있다. 핵심 개념(watch → reconcile)은 이 레슨에서 이미 잡았으니, 만들기는 그 위에 얹는 손기술일 뿐이다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/">공식 문서: Custom Resources</a> ·
+<a href="https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/">CustomResourceDefinitions (실습 원전)</a> ·
+<a href="https://kubernetes.io/docs/concepts/extend-kubernetes/operator/">Operator pattern</a> ·
+<a href="https://operatorframework.io/">operatorframework.io (Operator SDK)</a> —
+실습이 막히면 CRD 문서의 예제를, 개념이 헷갈리면 Operator pattern 절을 다시 본다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "커스텀 리소스에 status 필드(status subresource)는 어떻게 다루나?", "Operator의 reconcile이 무한 루프 안 돌게 하는 법은?",
+"admission webhook은 CRD 검증과 어떻게 엮이나?" — 이 심화 갈래들도 원하면 짧게 붙일 수 있다.
+</div>
+
+<nav class="nav">
+  <a href="0020-qos-classes-eviction.html">← 0020 QoS 클래스</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

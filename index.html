@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JoTaeYang — 학습 노트</title>
+<style>
+:root{
+  --bg:#fdfcf8; --ink:#1a1a17; --muted:#6b6a63; --faint:#f2efe6; --rule:#e0dccf;
+  --accent:#9a3412; --accent-2:#1d4ed8;
+  --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,"Apple SD Gothic Neo","Pretendard",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Apple SD Gothic Neo","Pretendard","Segoe UI",sans-serif;
+  --mono:"SF Mono","JetBrains Mono","Menlo","Consolas",monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#16161a; --ink:#e7e5df; --muted:#9b988f; --faint:#20202a; --rule:#34343f; --accent:#f0a07c; --accent-2:#93b4ff; }
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--serif);font-size:19px;line-height:1.62;margin:0;padding:0 1.25rem 6rem}
+.wrap{max-width:46rem;margin:0 auto}
+.kicker{font-family:var(--sans);font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin:3.5rem 0 .4rem}
+h1{font-weight:600;font-size:2.1rem;line-height:1.15;letter-spacing:-.01em;margin:0 0 .5rem}
+.subtitle{color:var(--muted);font-style:italic;margin:0 0 2rem}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+a:hover{border-bottom-color:var(--accent)}
+.card{display:block;border:1px solid var(--rule);border-radius:12px;padding:1.3rem 1.4rem;margin:1.1rem 0;background:var(--bg);border-bottom:1px solid var(--rule);transition:border-color .12s}
+.card:hover{border-color:var(--accent)}
+.card .t{font-weight:600;font-size:1.25rem;display:block;margin-bottom:.25rem;color:var(--ink)}
+.card .d{color:var(--muted);font-size:.95rem;font-style:italic}
+.card .meta{font-family:var(--sans);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--accent-2);margin-bottom:.5rem}
+footer{margin-top:3.5rem;padding-top:1.2rem;border-top:1px solid var(--rule);font-family:var(--sans);font-size:.82rem;color:var(--muted)}
+footer a{color:var(--muted);border:none}
+footer a:hover{color:var(--accent)}
+@media(max-width:480px){body{font-size:17px}h1{font-size:1.7rem}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">JoTaeYang · Learning Notes</p>
+<h1>손으로 배운 것들</h1>
+<p class="subtitle">한 번에 하나씩, 짧게. 각 코스는 한 권의 책처럼 읽히도록 만들었다.</p>
+
+<a class="card" href="teach/index.html">
+  <span class="meta">LLM Inference</span>
+  <span class="t">LLM 추론 최적화 — Zero부터 CUDA 커널까지</span>
+  <span class="d">KV 캐시·어텐션·배칭·양자화·speculative decoding·vLLM. 실무 서빙/최적화를 밑바닥부터.</span>
+</a>
+
+<a class="card" href="kubernetes/index.html">
+  <span class="meta">Kubernetes · KCNA</span>
+  <span class="t">Kubernetes Mastery — 진단에서 KCNA 전 도메인까지</span>
+  <span class="d">소유 체인·Service·probe·RBAC·스토리지·네트워크 심화. 각 레슨은 하나의 손에 잡히는 win을 남긴다.</span>
+</a>
+
+<footer>
+  <a href="https://github.com/JoTaeYang">github.com/JoTaeYang</a>
+</footer>
+
+</div>
+</body>
+</html>

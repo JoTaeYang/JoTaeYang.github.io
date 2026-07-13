@@ -1,0 +1,7 @@
+# Storage understood as claim/supply separation; persistence proven by outliving a Pod
+
+Lesson 0011 quizzes 3/3. PVC/PV/StorageClass taught as request/supply/factory (mirrors 0008 RBAC noun/verb split): PVC = the app's order form, PV = the actual storage, StorageClass = the factory that dynamically provisions a PV to satisfy the claim. Fulfilled the 0009 `volumeClaimTemplates` promise (stable name + stable disk per StatefulSet replica).
+
+**Evidence (2026-07-06):** Quizzes 3/3 (Q1 `WaitForFirstConsumer` = normal Pending distinct from LoadBalancer's `<pending>`, Q2 data survives because it lives in the PV outside the Pod, Q3 `volumeClaimTemplates`). Hands-on on kind's default `standard` (local-path) SC: PVC Pending → mount into Pod → PV auto-provisioned + Bound → wrote a file → deleted Pod → recreated with same PVC → file persisted. Access modes (RWO/ROX/RWX) kept at vocabulary level.
+
+**Implications:** KCNA Fundamentals (~46%) ⬜ items are now effectively complete (workloads, exposure, storage all done with lab evidence). Track pivots from hands-on Fundamentals to breadth: Container Orchestration domain (~22%) starting with CRI/CNI/CSI "interface trio" (Lesson 0012), naming the pluggable seams under what was already built (CRI↔kubelet/0007, CNI↔Pod IPs/0003, CSI↔StorageClass/0011). Note: local-path is a simple provisioner, NOT a CSI driver — keep that distinction accurate in 0012.

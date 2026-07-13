@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0022 — namespace 예산: ResourceQuota 와 LimitRange</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0022 <span class="tag">Fundamentals 심화</span></p>
+<h1>namespace 예산: ResourceQuota 와 LimitRange</h1>
+<p class="subtitle">0006 이 Pod 하나의 예산이었다면, 이번엔 그 위층 — namespace 전체의 예산 장부다. 그리고 "namespace = 격리"라는 흔한 오해를 손으로 바로잡는다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> 새 namespace 에 <code>ResourceQuota</code> 와 <code>LimitRange</code> 를 걸고,
+(a) requests 를 안 적은 Pod 에 LimitRange 가 <b>기본값을 자동으로 채워주는 것</b>과
+(b) quota 를 넘긴 Pod 가 <b>생성 자체에서 거부되는 것</b>을 kind 클러스터에서 직접 관찰한다.
+"namespace 는 네트워크 격리가 아니다"라는 오해도 여기서 못을 박는다.
+</div>
+
+<h2>1. 층을 다시 세운다 — Pod 예산 위의 namespace 예산</h2>
+
+<p><b>0006</b> 에서 배운 <code>requests</code>(예약)와 <code>limits</code>(상한)는 <b>Pod 하나</b>의 예산이었다.
+그런데 한 팀이 Pod 를 100 개 만들면? 각 Pod 는 얌전해도 팀 전체가 클러스터를 삼킨다.
+그래서 그 <b>위층</b>이 필요하다 — namespace 단위의 총량 장부.</p>
+
+<table class="cmp">
+<tr><th>층</th><th>대상</th><th>누가 거는가</th><th>레슨</th></tr>
+<tr><td><b>requests/limits</b></td><td>컨테이너 하나</td><td>Pod 작성자(개발자)</td><td>0006</td></tr>
+<tr><td><b>LimitRange</b></td><td>namespace 안 <em>개별</em> Pod/컨테이너의 기본값·경계</td><td>플랫폼/관리자</td><td>이 레슨</td></tr>
+<tr><td><b>ResourceQuota</b></td><td>namespace <em>전체</em>의 합계 상한</td><td>플랫폼/관리자</td><td>이 레슨</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — 예산은 두 방향으로 잰다</span>
+<b>ResourceQuota = 위에서 내려다본 총합</b>("이 팀 전부 합쳐 CPU 10 코어, memory 20Gi, Pod 20 개까지").
+<b>LimitRange = 아래에서 하나씩 본 경계</b>("Pod 하나당 최대 2 코어, 안 적으면 기본 requests 를 채워줌").
+같은 namespace 를 <em>총량</em>과 <em>낱개</em> 두 각도로 재는 것 — 층이 다르니 헷갈리지 말 것.
+</div>
+
+<h2>2. namespace 복습 — 그리고 가장 큰 오해</h2>
+
+<p><b>0006</b> 에서 실습을 <code>lab</code> namespace 에 격리했고, <b>0008</b> 의 RBAC 도 namespace 스코프였다.
+namespace 는 <b>클러스터를 논리적으로 나누는 가상 파티션</b>이다 — 이름 충돌을 막고, 권한(RBAC)과
+예산(Quota)을 팀별로 나누는 경계선. 이걸 <b>소프트 멀티테넌시</b>라 부른다.</p>
+
+<div class="warn">
+<b>흔한 오해 — namespace 는 네트워크/보안 격리가 아니다.</b>
+<b>0013</b> 에서 본 "평평한(flat) 네트워크"를 떠올려라: 기본 상태에서 <code>team-a</code> namespace 의 Pod 는
+<code>team-b</code> namespace 의 Pod 에 <b>그냥 접속된다</b>. namespace 는 <em>이름과 권한과 예산</em>을 나눌 뿐,
+패킷을 막지 않는다. 진짜 네트워크 격리는 <b>NetworkPolicy</b>(0013 에서 씨를 뿌렸고, KCSA·Level 2 에서 본격화)가
+필요하다. "namespace 를 나눴으니 안전하다"는 시험·실무 양쪽의 단골 함정이다.
+</div>
+
+<h2>3. ResourceQuota — namespace 총량 상한</h2>
+
+<p><code>ResourceQuota</code> 는 한 namespace 안 <b>모든 Pod 를 합친 값</b>에 천장을 씌운다. 세 종류를 제한한다:</p>
+
+<table class="cmp">
+<tr><th>제한 대상</th><th>필드 예</th><th>뜻</th></tr>
+<tr><td>requests 합계</td><td><code>requests.cpu</code>, <code>requests.memory</code></td><td>namespace 안 모든 컨테이너 requests 의 총합 상한</td></tr>
+<tr><td>limits 합계</td><td><code>limits.cpu</code>, <code>limits.memory</code></td><td>모든 컨테이너 limits 의 총합 상한</td></tr>
+<tr><td>오브젝트 개수</td><td><code>pods</code>, <code>services</code>, <code>configmaps</code>…</td><td>만들 수 있는 리소스 개수 상한</td></tr>
+</table>
+
+<div class="warn">
+<b>함정 — Quota 가 requests 를 재면, Pod 는 requests 를 반드시 적어야 한다.</b>
+namespace 에 <code>requests.cpu</code> quota 가 걸리면, 쿠버네티스는 새 Pod 의 requests 합을 장부에 더해야 하는데
+<b>requests 를 안 적은 Pod 는 얼마를 더할지 몰라 아예 생성을 거부한다</b>
+(<code>must specify requests.cpu</code>). 그래서 Quota 는 보통 <b>LimitRange 와 짝</b>으로 쓴다 —
+LimitRange 가 기본 requests 를 채워주면 개발자가 매번 안 적어도 통과한다. 이 짝을 다음 절과 실습에서 본다.
+</div>
+
+<h2>4. LimitRange — 개별 Pod 의 기본값과 경계</h2>
+
+<p><code>LimitRange</code> 는 그 namespace 안 <b>낱개 컨테이너</b>에 두 가지를 한다:</p>
+
+<table class="cmp">
+<tr><th>필드</th><th>역할</th></tr>
+<tr><td><code>defaultRequest</code></td><td>requests 를 <b>안 적은</b> 컨테이너에 자동으로 채울 requests 기본값</td></tr>
+<tr><td><code>default</code></td><td>limits 를 안 적은 컨테이너에 자동으로 채울 limits 기본값</td></tr>
+<tr><td><code>min</code> / <code>max</code></td><td>허용하는 requests/limits 의 하한·상한 — 벗어나면 <b>생성 거부</b></td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — 이 둘이 짝인 이유가 여기서 맞물린다</span>
+Quota 는 "requests 를 안 적으면 거부"하고, LimitRange 는 "requests 를 안 적으면 <b>채워준다</b>".
+그래서 <b>LimitRange 가 Quota 보다 먼저</b> 개발자의 Pod 에 기본값을 주입하고 → 채워진 값으로 Quota 장부에 더한다.
+개발자는 <code>image</code> 만 적은 얌전한 Pod 를 던져도, 관리자가 정한 기본 예산이 자동으로 붙어 장부에 잡히는 것.
+<b>0020</b> 의 QoS 와도 연결된다 — LimitRange 가 requests 와 limits 를 같게 채우면 그 Pod 는 <code>Guaranteed</code>,
+requests 만 채우고 limits 가 비면 <code>Burstable</code> 이 된다. 기본값 설계가 QoS 클래스를 좌우한다.
+</div>
+
+<h2>5. 실습 — 짝을 kind 에서 직접 굴린다</h2>
+
+<div class="note">kind 클러스터 <code>mastery</code> 이어서 사용. 이번엔 <code>team-a</code> namespace 를 하나 만들어 예산을 걸고, 두 가지를 관찰한다: (a) 기본값 주입, (b) quota 초과 거부. 정리는 마지막에 namespace 하나 지우는 걸로 끝난다(0006 의 격리 습관).</div>
+
+<p><b>1) namespace + ResourceQuota + LimitRange 를 한 번에 apply</b> (heredoc):</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl create namespace team-a</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -n team-a -f - &lt;&lt;'EOF'</span>
+<span class="out">apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: team-a-quota
+spec:
+  hard:
+    requests.cpu: "1"          <span class="hl"># 팀 전체 requests 합 최대 1 코어</span>
+    requests.memory: 1Gi
+    limits.cpu: "2"
+    limits.memory: 2Gi
+    pods: "3"                  <span class="hl"># Pod 최대 3 개</span>
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: team-a-limits
+spec:
+  limits:
+  - type: Container
+    defaultRequest:            <span class="hl"># requests 를 안 적으면 이걸 채움</span>
+      cpu: 200m
+      memory: 128Mi
+    default:                   <span class="hl"># limits 를 안 적으면 이걸 채움</span>
+      cpu: 500m
+      memory: 256Mi
+    min:
+      cpu: 100m
+      memory: 64Mi
+    max:                       <span class="hl"># 이보다 크면 생성 거부</span>
+      cpu: "1"
+      memory: 512Mi
+EOF</span>
+<span class="out">resourcequota/team-a-quota created
+limitrange/team-a-limits created</span>
+</div>
+
+<p><b>2) 관찰 (a) — requests 를 <em>안 적은</em> Pod 에 기본값이 채워진다:</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl run bare -n team-a --image=nginx:1.27</span>   <span class="hl"># resources 를 하나도 안 적었다</span>
+<span class="out">pod/bare created</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pod bare -n team-a -o jsonpath='{.spec.containers[0].resources}'; echo</span>
+<span class="out">{"limits":{"cpu":"500m","memory":"256Mi"},<span class="hl">"requests":{"cpu":"200m","memory":"128Mi"}</span>}</span>
+</div>
+
+<p>개발자는 <code>--image</code> 만 줬는데, LimitRange 가 <code>defaultRequest</code>/<code>default</code> 를 조용히 채웠다.
+requests 와 limits 가 <em>다르므로</em> 이 Pod 의 QoS 는 <code>Burstable</code>(0020) — <code>kubectl get pod bare -n team-a -o jsonpath='{.status.qosClass}'</code> 로 확인할 수 있다.</p>
+
+<p><b>3) 관찰 (b) — quota 를 넘기면 생성이 거부된다.</b> 장부부터 본다:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl describe resourcequota team-a-quota -n team-a</span>
+<span class="out">Name:            team-a-quota
+Resource         Used   Hard
+--------         ----   ----
+limits.cpu       500m   2
+limits.memory    256Mi  2Gi
+pods             <span class="hl">1</span>      <span class="hl">3</span>
+requests.cpu     200m   1
+requests.memory  128Mi  1Gi</span>
+<span class="prompt">$</span> <span class="cmd"># requests.memory 400Mi 짜리 Pod 5 개를 시도 → memory 총합(1Gi)·pods(3) 두 벽에 부딪힌다</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -n team-a -f - &lt;&lt;'EOF'</span>
+<span class="out">apiVersion: v1
+kind: Pod
+metadata:
+  name: big
+spec:
+  containers:
+  - name: app
+    image: nginx:1.27
+    resources:
+      requests:
+        memory: 900Mi        <span class="hl"># 이미 128Mi 쓴 장부에 900Mi → 1Gi 초과</span>
+EOF</span>
+<span class="out"><span class="hl">Error from server (Forbidden)</span>: error when creating "STDIN":
+  pods "big" is forbidden: <span class="hl">exceeded quota: team-a-quota</span>,
+  requested: requests.memory=900Mi, used: requests.memory=128Mi, limited: requests.memory=1Gi</span>
+</div>
+
+<p>Pod 가 <code>Pending</code> 이 되는 게 아니라 <b>생성 자체가 거부</b>됐다(0006 의 Pending 과 다른 층 — 스케줄러까지
+가지도 못하고 API 서버가 admission 단계에서 막는다). 에러 메시지가 친절히 <code>used / limited</code> 를 보여준다.</p>
+
+<div class="warn">
+<b>Quota 인데 LimitRange 를 지웠다면?</b> LimitRange 없이 <code>requests.cpu</code> quota 만 걸린 namespace 에서
+<code>kubectl run</code> 으로 맨몸 Pod 를 만들면 <code>Error ... must specify requests.cpu</code> 로 거부된다.
+바로 4 절의 함정 — 짝이 깨지면 개발자가 매번 requests 를 손으로 적어야 한다.
+</div>
+
+<p>정리: <code>kubectl delete namespace team-a</code> — namespace 를 지우면 Quota·LimitRange·Pod 가 통째로 사라진다.</p>
+
+<h2>6. 왜 중요한가 — 비용 가드레일과 멀티테넌시</h2>
+
+<p>ResourceQuota 는 곧 <b>팀별 예산 가드레일</b>이다. <b>0019</b> 의 비용 관리 관점에서 보면, quota 는
+"이 팀은 클러스터의 이만큼만 쓴다"를 <b>강제로</b> 못박는 장치 — 한 팀의 폭주가 다른 팀의 Pod 를
+굶기지 못하게 막는 소프트 멀티테넌시의 핵심이다. LimitRange 는 그 안에서 개발자가 예산을 안 적어도
+합리적 기본값이 붙게 해 <b>QoS(0020)</b> 와 장부(Quota) 양쪽을 동시에 만족시킨다.</p>
+
+<div class="aha">
+<span class="label">KCNA 깊이 — 딱 세 줄</span>
+<b>namespace = 소프트 멀티테넌시</b>(이름·권한·예산의 논리적 파티션, 네트워크 격리 아님).
+<b>ResourceQuota = namespace 총량</b>(합계 requests/limits·개수 상한).
+<b>LimitRange = 개별 기본값·경계</b>(default·min·max). 그 이상(스코프 셀렉터, priority class quota 등)은 심화 몫.
+</div>
+
+<h2>7. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. <code>requests.cpu</code> quota 가 걸린 namespace 에 requests 를 안 적은 Pod 를 만들었더니 거부됐다. 이 거부를 없애는 가장 알맞은 방법은?</p>
+  <div class="opts">
+    <button class="opt">quota 의 <code>requests.cpu</code> 값을 더 크게 올린다</button>
+    <button class="opt" data-correct="true">같은 namespace 에 <code>defaultRequest.cpu</code> 를 정의한 LimitRange 를 추가한다</button>
+    <button class="opt">Pod 를 다른 namespace 로 옮긴다</button>
+  </div>
+  <div class="explain">Quota 가 requests 를 재면 requests 없는 Pod 는 "얼마를 장부에 더할지 몰라" 거부된다. LimitRange 의 <code>defaultRequest</code> 가 기본값을 채워주면 개발자가 매번 안 적어도 통과한다 — 둘이 짝으로 쓰이는 바로 그 이유다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. <code>team-a</code> 와 <code>team-b</code> 두 namespace 로 앱을 나눴다. 기본 상태에서 team-b 의 Pod 는 team-a 의 Pod 에 네트워크로 접근할 수 있나?</p>
+  <div class="opts">
+    <button class="opt">아니다 — namespace 는 네트워크 경계라 서로 막힌다</button>
+    <button class="opt" data-correct="true">그렇다 — namespace 는 네트워크 격리가 아니다. 막으려면 NetworkPolicy 가 필요하다</button>
+    <button class="opt">ResourceQuota 를 걸어야만 접근이 열린다</button>
+  </div>
+  <div class="explain">0013 의 평평한 네트워크: namespace 는 이름·권한·예산을 나눌 뿐 패킷을 막지 않는다. 진짜 네트워크 격리는 NetworkPolicy(KCSA·Level 2)의 몫이다. "namespace = 격리"는 대표적 함정.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. ResourceQuota 와 LimitRange 의 관계로 옳은 것은?</p>
+  <div class="opts">
+    <button class="opt">둘 다 Pod 하나의 requests/limits 를 정하는 같은 층의 도구다</button>
+    <button class="opt">LimitRange 는 namespace 총합을, ResourceQuota 는 개별 컨테이너 기본값을 정한다</button>
+    <button class="opt" data-correct="true">ResourceQuota 는 namespace <em>전체 합계</em>의 천장, LimitRange 는 <em>개별</em> 컨테이너의 기본값·경계 — 층이 다르다</button>
+  </div>
+  <div class="explain">Quota = 위에서 내려다본 총합(팀 전체 CPU·memory·개수), LimitRange = 아래에서 하나씩 본 경계(Pod 당 default·min·max). 같은 namespace 를 총량과 낱개 두 각도로 재는, 서로 다른 층의 도구다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2·Q3 를 맞히면 namespace 예산 층(총량 Quota + 낱개 LimitRange)과
+"namespace ≠ 네트워크 격리" 오해까지 <b>✅</b> — 0006 위에 한 층을 올렸다.
+다음 단계는 그 못 박은 오해를 실제로 푸는 곳, 즉 <b>NetworkPolicy</b>(Level 2 · KCSA)다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">예산 두 도구가 층이 달라 헷갈리기 쉽다. 궁금한 것만 펼쳐 보면 된다.</p>
+
+<details class="faq">
+<summary>ResourceQuota 랑 LimitRange, 한 문장으로 구분하면?</summary>
+<div class="a"><p><b>ResourceQuota = namespace 전체의 합계 천장</b>("팀 다 합쳐 CPU 10 코어까지"), <b>LimitRange = Pod 하나당 기본값·경계</b>("안 적으면 200m 채우고, 2 코어 넘으면 거부"). 총량 대 낱개 — 층이 다르다. 보통 짝으로 같이 건다.</p></div>
+</details>
+
+<details class="faq">
+<summary>namespace 만 나누면 팀끼리 격리되는 거 아닌가요?</summary>
+<div class="a"><p>절반만 맞다. namespace 는 <b>이름·권한(RBAC)·예산(Quota)</b>을 나눈다 — 이걸 소프트 멀티테넌시라 한다. 하지만 <b>네트워크는 안 나뉜다</b>: 기본 상태에서 다른 namespace 의 Pod 끼리 그냥 통신된다(0013 평평한 네트워크). 패킷을 막으려면 <code>NetworkPolicy</code> 가 별도로 필요하다.</p></div>
+</details>
+
+<details class="faq">
+<summary>왜 Quota 만 걸면 Pod 가 거부되나요?</summary>
+<div class="a"><p>Quota 가 <code>requests.cpu</code> 를 재기 시작하면, 새 Pod 마다 requests 를 장부에 더해야 한다. 그런데 requests 를 안 적은 Pod 는 <b>더할 값이 없어서</b> 쿠버네티스가 "requests.cpu 를 명시하라"며 거부한다. LimitRange 의 <code>defaultRequest</code> 를 같이 걸면 기본값이 채워져 이 문제가 사라진다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>default</code> 랑 <code>defaultRequest</code> 는 뭐가 달라요?</summary>
+<div class="a"><p><code>defaultRequest</code> 는 <b>requests</b> 를 안 적었을 때 채우는 값(예약), <code>default</code> 는 <b>limits</b> 를 안 적었을 때 채우는 값(상한)이다. 0006 의 requests/limits 두 얼굴이 그대로 이어진다 — LimitRange 는 그 둘의 기본값을 각각 정한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>LimitRange 의 <code>min</code>/<code>max</code> 는 requests 를 재나요 limits 를 재나요?</summary>
+<div class="a"><p><code>type: Container</code> LimitRange 에서 <code>min</code>/<code>max</code> 는 requests 와 limits <b>둘 다</b>의 허용 범위다. 예컨대 <code>max.cpu: "1"</code> 이면 requests 든 limits 든 1 코어를 넘기려 하면 생성이 거부된다. 너무 크거나 작은 값으로 클러스터를 어지럽히지 못하게 하는 가드레일이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>quota 초과면 Pod 가 Pending 되나요?</summary>
+<div class="a"><p>아니다. <b>생성 자체가 거부</b>된다(<code>Error from server (Forbidden): exceeded quota</code>). 이건 API 서버의 admission 단계에서 막히는 것 — 스케줄러까지 가지도 못한다. 0006 의 <code>Pending</code>(스케줄러가 노드를 못 찾음)과는 완전히 다른 층의 실패다.</p></div>
+</details>
+
+<details class="faq">
+<summary>LimitRange 기본값이 QoS 클래스에 영향을 주나요?</summary>
+<div class="a"><p>준다. LimitRange 가 <code>defaultRequest</code> 와 <code>default</code> 를 <b>같은 값</b>으로 채우면 그 Pod 는 <code>Guaranteed</code>, requests 만 채우고 limits 가 비면 <code>Burstable</code>(0020)이 된다. 즉 관리자의 기본값 설계가 개발자 모르게 QoS 등급을 정하는 셈 — 축출 우선순위까지 좌우한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>ResourceQuota 로 Pod 개수도 제한할 수 있나요?</summary>
+<div class="a"><p>있다. <code>pods: "20"</code> 처럼 오브젝트 개수도 quota 대상이다. CPU·memory 뿐 아니라 <code>services</code>, <code>configmaps</code>, <code>persistentvolumeclaims</code>(0011 의 PVC) 개수까지 제한할 수 있다. 한 팀이 리소스를 무한정 찍어내는 걸 막는 용도다.</p></div>
+</details>
+
+<details class="faq">
+<summary>RBAC(0008)랑 ResourceQuota 는 같은 건가요?</summary>
+<div class="a"><p>다르다. 둘 다 <b>namespace 스코프</b>라 헷갈리지만, RBAC 는 <b>누가 무엇을 할 수 있나</b>(권한), ResourceQuota 는 <b>얼마나 쓸 수 있나</b>(예산)를 정한다. 팀 namespace 를 줄 때 보통 셋을 같이 건다 — RBAC(권한 경계) + Quota(예산 경계) + (원하면) NetworkPolicy(네트워크 경계).</p></div>
+</details>
+
+<details class="faq">
+<summary>이미 quota 를 초과 중인 namespace 에 quota 를 더 낮추면 어떻게 되나요?</summary>
+<div class="a"><p>기존 Pod 는 <b>죽지 않는다</b> — quota 는 <b>새 리소스 생성 시점</b>에만 검사한다. 다만 그 상태에선 <code>Used</code> 가 <code>Hard</code> 를 넘은 채로 남아, 새 Pod 는 계속 거부된다. <code>kubectl describe resourcequota</code> 로 Used/Hard 를 보며 조정한다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/policy/resource-quotas/">공식 문서: Resource Quotas</a> —
+namespace 총량 제한(requests/limits 합계·오브젝트 개수)의 원전.
+<a href="https://kubernetes.io/docs/concepts/policy/limit-range/">Limit Ranges</a> 로 default/min/max 를,
+<a href="https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/">Namespaces</a> 로 "논리적 파티션·소프트 멀티테넌시"의 정의를 확인할 수 있다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "quota 를 특정 PriorityClass 에만 걸려면(scopeSelector)?", "PVC storage quota 는 어떻게 재나?",
+"team-a↔team-b 통신을 정말 막으려면?" — 마지막 질문의 답이 곧 <b>Level 2(KCSA)의 시작점, NetworkPolicy</b>다.
+0013 에서 씨를 뿌린 그 네트워크 격리를 거기서 손으로 건다.
+</div>
+
+<nav class="nav">
+  <a href="0021-operators-crd.html">← 0021 Operator·CRD</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

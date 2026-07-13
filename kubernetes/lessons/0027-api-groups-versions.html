@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0027 — API 그룹·버전·deprecation: 모든 매니페스트의 첫 줄을 읽는 법</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0027 <span class="tag">Fundamentals 심화</span></p>
+<h1>API 그룹 · 버전 · deprecation</h1>
+<p class="subtitle">지금까지 쓴 모든 매니페스트는 <code>apiVersion:</code> 으로 시작했다. 그 한 줄이 정확히 무엇을 가리키는지 — <b>어느 API 그룹의 몇 번째 버전</b>인지 — 를 읽을 줄 알면, 쿠버네티스 API가 <b>하나의 덩어리가 아니라 그룹들의 집합</b>임이 보인다. 이번엔 <code>kubectl api-resources</code>·<code>api-versions</code>·<code>explain</code> 으로 <b>내 클러스터의 API 지도를 직접 걸어 내려간다</b>.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> <code>apiVersion: apps/v1</code> 을 보면 "<b>apps 그룹</b>의 <b>stable v1 버전</b>"이라고 즉시 해석하고,
+<code>v1alpha1</code>·<code>v1beta1</code>·<code>v1</code> 의 <b>성숙도 차이</b>를 안다. <b>0021의 CRD가 새 그룹을 추가</b>하는 것,
+<b>0010의 Ingress가 그룹을 옮긴</b> deprecation 사례, <b>0008의 RBAC 그룹</b>이 하나로 꿰인다.
+KCNA 리터러시의 마지막 조각 — 이제 매니페스트 첫 줄을 눈감고도 읽는다.
+</div>
+
+<h2>0. 한눈에 — 세 줄</h2>
+
+<div class="aha">
+<span class="label">딱 이 세 줄</span>
+<p><b>모든 오브젝트 = <code>apiVersion</code> + <code>kind</code></b>. <code>apiVersion</code> 은 <code>group/version</code> 형식.
+<b>Core 그룹은 이름이 빈 문자열</b>이라서 그냥 <code>v1</code>(Pod·Service·ConfigMap). 이름 있는 그룹은 <code>apps/v1</code>·<code>batch/v1</code>처럼 앞에 그룹명이 붙는다.</p>
+<p><b>왜 그룹인가</b> = API를 <b>모듈화</b>하고 <b>독립적으로 버저닝</b>하기 위해. 그래서 CRD(0021)가 <b>새 그룹을 통째로 추가</b>할 수 있다 — 쿠버네티스 API는 하나의 거대한 덩어리가 아니라 <b>그룹의 집합</b>.</p>
+<p><b>버전은 성숙 단계를 뜻한다</b>: <code>v1alpha1</code>(실험, 기본 off) → <code>v1beta1</code>(검증 중, 바뀔 수 있음) → <code>v1</code>(stable, 하위호환 보장). stable API를 제거할 땐 <b>사전 공지(deprecation 정책)</b>를 거친다 — 0010 Ingress의 그룹 이동이 그 사례.</p>
+</div>
+
+<h2>1. 모든 오브젝트는 apiVersion + kind 로 시작한다</h2>
+
+<p>지금까지 손으로 쓴 매니페스트를 떠올려 보라. Pod든 Deployment든 Ingress든, 맨 위 두 줄은 언제나 같은 골격이었다:</p>
+
+<div class="cluster"><span class="ctx">manifest · 공통 골격</span>
+<span class="cmd">apiVersion: apps/v1        # &lt;group&gt;/&lt;version&gt; — "어느 그룹의 몇 버전 API로 이걸 해석하라"
+kind: Deployment           # 그 그룹 안의 리소스 종류(명사)
+metadata:
+  name: web
+spec:
+  ...</span>
+</div>
+
+<p><code>apiVersion</code> 은 <b>API server에게 "이 오브젝트를 어느 그룹·버전의 스키마로 읽어라"</b>를 말하는 좌표다.
+<code>kind</code> 는 그 그룹 안의 <b>명사</b>. 이 둘이 있어야 API server가 저장·검증·라우팅을 할 수 있다.</p>
+
+<div class="aha">
+<span class="label">아하 — Core 그룹은 왜 이름이 없나</span>
+<code>Pod</code>·<code>Service</code>·<code>ConfigMap</code>·<code>Namespace</code> 의 apiVersion 은 그냥 <code>v1</code> — 그룹명이 안 보인다.
+이건 이들이 <b>Core(레거시) 그룹</b>에 속하고, 그 그룹의 <b>이름이 빈 문자열("")</b>이기 때문이다. 쿠버네티스 초창기에
+그룹 개념이 생기기 전부터 있던 원조 리소스들이라, 하위호환을 위해 "그룹명 없이 <code>v1</code>" 형태를 유지한다.
+그래서 <code>apiVersion: v1</code> 을 보면 "<b>이름 없는 Core 그룹의 v1</b>"이라고 읽으면 된다.
+</div>
+
+<p>이름 있는 그룹은 <code>&lt;group&gt;/&lt;version&gt;</code> 형태로 그룹명이 앞에 붙는다. 지금까지 이 트랙에서 쓴 kind 들이
+어느 그룹에 속하는지 정리하면 — 매니페스트 첫 줄이 갑자기 읽힌다:</p>
+
+<table class="cmp">
+<tr><th>apiVersion</th><th>그룹</th><th>대표 kind</th><th>이 트랙 연결</th></tr>
+<tr><td><code>v1</code></td><td><b>Core</b>(빈 문자열 "")</td><td>Pod · Service · ConfigMap · Secret · Namespace · Node · PersistentVolumeClaim</td><td>0002 · 0005 · 0011</td></tr>
+<tr><td><code>apps/v1</code></td><td><b>apps</b></td><td>Deployment · StatefulSet · DaemonSet · ReplicaSet</td><td>0002 · 0009</td></tr>
+<tr><td><code>batch/v1</code></td><td><b>batch</b></td><td>Job · CronJob</td><td>0009</td></tr>
+<tr><td><code>networking.k8s.io/v1</code></td><td><b>networking.k8s.io</b></td><td>Ingress · NetworkPolicy</td><td>0010</td></tr>
+<tr><td><code>rbac.authorization.k8s.io/v1</code></td><td><b>rbac.authorization.k8s.io</b></td><td>Role · RoleBinding · ClusterRole · ClusterRoleBinding</td><td>0008</td></tr>
+<tr><td><code>apiextensions.k8s.io/v1</code></td><td><b>apiextensions.k8s.io</b></td><td>CustomResourceDefinition</td><td>0021</td></tr>
+</table>
+
+<div class="note"><b>왜 Deployment는 <code>apps/v1</code> 인데 Pod는 <code>v1</code> 일까?</b> Pod는 원조 Core 리소스라 그룹명이 없고,
+Deployment·StatefulSet 등은 나중에 <b>apps 그룹</b>으로 묶여 추가됐다. 그래서 같은 워크로드라도 apiVersion이 다르다 —
+헷갈리면 <code>kubectl explain &lt;kind&gt;</code> 나 <code>kubectl api-resources</code>(5절)로 언제든 확인할 수 있다.</div>
+
+<h2>2. 왜 그룹으로 나누나 — 모듈화·독립 버저닝·확장</h2>
+
+<p>쿠버네티스 API를 <b>하나의 거대한 v1</b> 로 만들 수도 있었을 것이다. 굳이 그룹으로 쪼갠 이유는 셋이다:</p>
+
+<table class="cmp">
+<tr><th>이유</th><th>뜻</th><th>결과</th></tr>
+<tr><td><b>모듈화</b></td><td>기능별로 API를 묶어 관리</td><td>네트워킹은 <code>networking.k8s.io</code>, 권한은 <code>rbac.authorization.k8s.io</code> — 관심사가 분리됨</td></tr>
+<tr><td><b>독립 버저닝</b></td><td>그룹마다 <b>따로</b> 버전을 올린다</td><td><code>batch</code> 가 v1인데 어떤 그룹은 아직 v1beta1일 수 있음 — 한쪽 변경이 다른 쪽을 안 흔든다</td></tr>
+<tr><td><b>확장(extensibility)</b></td><td>새 그룹을 <b>추가</b>할 수 있음</td><td><b>CRD(0021)</b>가 <code>stable.example.com</code> 같은 <b>새 그룹을 통째로</b> API에 붙인다</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — 0021과 직접 연결</span>
+0021 실습에서 <code>group: stable.example.com</code> 으로 CRD를 apply 하자 <code>kubectl get crontabs</code> 가 동작했다.
+그게 바로 <b>새 API 그룹 하나가 런타임에 추가된 것</b>이다. 즉 API 그룹 구조가 있기 때문에 쿠버네티스는
+<b>코어를 안 건드리고도 무한히 확장</b>된다. cert-manager 는 <code>cert-manager.io</code> 그룹을, Prometheus Operator 는
+<code>monitoring.coreos.com</code> 그룹을 각자 추가한다 — 전부 "그룹의 집합"이라는 이 구조 위에 얹힌다.
+<b>그래서 "쿠버네티스 API = 하나의 덩어리가 아니라 그룹들의 집합"</b>이라는 문장이 리터러시의 핵심이다.
+</div>
+
+<h2>3. 버전 = 성숙 단계 (alpha · beta · stable)</h2>
+
+<p>버전 문자열의 모양이 그 API의 <b>성숙도와 안정성 보장</b>을 그대로 말해 준다. <code>v1alpha1</code>·<code>v2beta3</code>·<code>v1</code> 을
+보면 아래 표로 즉시 해석할 수 있다:</p>
+
+<table class="cmp">
+<tr><th>단계</th><th>모양</th><th>기본 활성화</th><th>하위호환 보장</th><th>뜻</th></tr>
+<tr><td><b>alpha</b></td><td><code>v1alpha1</code></td><td><b>기본 off</b> (feature gate로 켜야)</td><td>없음 — 예고 없이 바뀌거나 <b>사라질 수 있음</b></td><td>실험적. 프로덕션 금지</td></tr>
+<tr><td><b>beta</b></td><td><code>v1beta1</code></td><td>과거엔 기본 on (지금은 정책상 off 경향)</td><td>제한적 — 필드가 <b>바뀔 수 있음</b>, 마이그레이션 예고는 함</td><td>검증 중. 신중히 사용</td></tr>
+<tr><td><b>stable</b></td><td><code>v1</code></td><td>기본 on</td><td><b>보장</b> — 오래 유지되고 제거는 사전 공지</td><td>프로덕션 안전</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — CRD의 served/storage와 같은 뿌리다</span>
+0021 CRD 실습에서 <code>versions: - name: v1, served: true, storage: true</code> 를 썼다. 바로 그 <b>버전 성숙 개념</b>이
+빌트인 API에도 그대로 적용된다. CRD가 v1beta1 → v1 로 성숙하는 것과, 빌트인 Ingress가 <code>v1beta1</code> → <code>v1</code> 로
+성숙한 것은 <b>완전히 같은 메커니즘</b>이다. API server가 여러 버전을 동시에 <code>served</code> 하면서 하나를 <code>storage</code> 로
+고정하고 버전 간 변환을 해주는 것도 빌트인·CRD 공통. <b>버전 성숙 규칙은 하나</b> — 빌트인이냐 커스텀이냐만 다르다.
+</div>
+
+<div class="warn">
+<b>alpha 버전은 프로덕션에 쓰지 마라.</b> <code>v1alpha1</code> 은 기본으로 꺼져 있고(feature gate 필요),
+클러스터 업그레이드 한 번에 <b>필드가 바뀌거나 리소스 자체가 사라질 수</b> 있다 — 하위호환 보장이 전혀 없기 때문이다.
+"기능이 있다"와 "안전하게 의존해도 된다"는 다른 이야기. 버전 문자열이 그 경계를 그대로 알려 준다.
+</div>
+
+<h2>4. deprecation 정책 — stable은 오래 보장, 제거는 예고</h2>
+
+<p>API가 영원하진 않다. 더 나은 설계로 옮겨가면 옛 버전은 <b>deprecated(폐기 예정)</b> 표시가 붙고, 정해진 기간 뒤 제거된다.
+핵심은 쿠버네티스가 <b>사전 공지 정책</b>을 지킨다는 것 — stable(<code>v1</code>) API는 최소 여러 릴리스에 걸쳐 유지된 뒤에야 제거된다.</p>
+
+<div class="aha">
+<span class="label">아하 — 0010 Ingress가 바로 그 사례다</span>
+Ingress 는 역사적으로 <code>extensions/v1beta1</code> → <code>networking.k8s.io/v1beta1</code> → <b><code>networking.k8s.io/v1</code></b> 로
+<b>그룹과 버전을 옮겼다</b>. 그래서 오래된 튜토리얼의 <code>apiVersion: extensions/v1beta1</code> 을 그대로 apply 하면
+요즘 클러스터(v1.22+)에서는 <b>거부되거나 경고</b>가 뜬다. 0010에서 우리가 <code>networking.k8s.io/v1</code> 을 쓴 게 바로
+"제거된 옛 그룹 대신 현재 stable 그룹을 쓴 것". <b>이게 deprecation 정책이 실제로 작동한 흔적</b>이다.
+</div>
+
+<div class="note"><b><code>kubectl apply</code> 가 가끔 경고를 내는 이유:</b> 클러스터가 아직 deprecated 버전을 <code>served</code> 하고 있지만
+"이 apiVersion 은 곧 제거된다, 새 버전으로 옮겨라"라고 미리 알려주는 것이다. 예:
+<code>Warning: extensions/v1beta1 Ingress is deprecated in v1.14+, unavailable in v1.22+; use networking.k8s.io/v1 Ingress</code>.
+경고가 뜨면 무시하지 말고 <b>apiVersion 을 최신 stable로 갱신</b>하는 게 정석 — 다음 업그레이드에서 진짜로 깨지기 전에.</div>
+
+<h2>5. 실습 — 내 클러스터의 API 지도를 걸어 내려간다 (kind 클러스터)</h2>
+
+<p>말로만 하지 말고 손으로 확인한다. <code>mastery/lab</code> 의 kind 클러스터에서 <b>세 명령</b>으로 API 그룹·버전·스키마를 직접 읽는다.</p>
+
+<p><b>5-1. <code>kubectl api-resources</code> — kind 가 어느 그룹·버전에, namespaced 인지 읽기:</b></p>
+
+<div class="cluster"><span class="ctx">terminal · kind 클러스터</span>
+<span class="prompt">$</span> <span class="cmd">kubectl api-resources | head -8</span>   <span class="hl"># NAME / SHORTNAMES / APIVERSION / NAMESPACED / KIND 컬럼</span>
+<span class="out">NAME          SHORTNAMES   APIVERSION   NAMESPACED   KIND
+configmaps    cm           v1           true         ConfigMap
+namespaces    ns           v1           false        Namespace
+nodes         no           v1           false        Node
+pods          po           v1           true         Pod
+services      svc          v1           true         Service
+deployments   deploy       apps/v1      true         Deployment
+jobs                       batch/v1     true         Job</span>
+<span class="prompt">$</span> <span class="cmd">kubectl api-resources --api-group=apps</span>   <span class="hl"># 한 그룹만 필터</span>
+<span class="out">NAME          SHORTNAMES   APIVERSION   NAMESPACED   KIND
+daemonsets    ds           apps/v1      true         DaemonSet
+deployments   deploy       apps/v1      true         Deployment
+replicasets   rs           apps/v1      true         ReplicaSet
+statefulsets  sts          apps/v1      true         StatefulSet</span>
+</div>
+
+<div class="note"><b>컬럼 읽는 법:</b> <code>APIVERSION</code> 이 바로 매니페스트에 쓸 <code>apiVersion</code> 값이다 —
+<code>Pod</code> 은 <code>v1</code>, <code>Deployment</code> 는 <code>apps/v1</code>. <code>NAMESPACED</code> 는 그 리소스가 네임스페이스에 속하는지
+(Pod=true, Node=false). 1절 표를 통째로 외울 필요 없이 <b>이 명령 하나로 언제든 확인</b>하면 된다.</div>
+
+<p><b>5-2. <code>kubectl api-versions</code> — 이 클러스터에 설치된 그룹/버전 전체 목록:</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl api-versions</span>   <span class="hl"># 각 줄이 하나의 group/version</span>
+<span class="out">admissionregistration.k8s.io/v1
+apiextensions.k8s.io/v1
+apps/v1
+batch/v1
+networking.k8s.io/v1
+rbac.authorization.k8s.io/v1
+v1
+...</span>
+<span class="prompt">$</span> <span class="cmd">kubectl api-versions | grep -c /</span>   <span class="hl"># 이름 있는 그룹의 버전 수 (v1은 슬래시 없어 제외)</span>
+<span class="out">25</span>
+</div>
+
+<div class="aha">
+<span class="label">아하 — 여기에 CRD 그룹이 나타난다</span>
+0021 실습에서 <code>stable.example.com</code> CRD를 apply 했다면, 이 목록에 <code>stable.example.com/v1</code> 한 줄이
+<b>추가로 등장</b>했을 것이다. <code>kubectl api-versions</code> 는 곧 <b>"이 클러스터의 API 표면 지도"</b> — 빌트인 그룹과
+CRD가 추가한 그룹이 <b>구분 없이 나란히</b> 뜬다. 그래서 이 목록만 봐도 "이 클러스터에 어떤 Operator/확장이 깔려 있나"를 읽을 수 있다.
+</div>
+
+<p><b>5-3. <code>kubectl explain</code> — 스키마를 걸어 내려간다 (0021 CRD 스키마와 같은 뿌리):</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl explain deployment</span>   <span class="hl"># 최상위: GROUP·VERSION·KIND 를 먼저 알려줌</span>
+<span class="out">GROUP:      apps
+KIND:       Deployment
+VERSION:    v1
+
+DESCRIPTION:
+     Deployment enables declarative updates for Pods and ReplicaSets.
+FIELDS:
+  apiVersion    &lt;string&gt;
+  kind          &lt;string&gt;
+  metadata      &lt;ObjectMeta&gt;
+  spec          &lt;DeploymentSpec&gt;
+  status        &lt;DeploymentStatus&gt;</span>
+<span class="prompt">$</span> <span class="cmd">kubectl explain deployment.spec.template.spec</span>   <span class="hl"># 점(.)으로 스키마를 깊이 파고듦</span>
+<span class="out">KIND:       Deployment
+VERSION:    apps/v1
+
+FIELD: spec &lt;PodSpec&gt;
+DESCRIPTION:
+     PodSpec is a description of a pod.
+FIELDS:
+  containers    &lt;[]Container&gt; -required-
+  volumes       &lt;[]Volume&gt;
+  nodeName      &lt;string&gt;
+  ...</span>
+</div>
+
+<div class="aha">
+<span class="label">아하 — explain은 openAPI 스키마를 읽어주는 것</span>
+<code>kubectl explain</code> 이 보여주는 필드 구조는 API server가 각 그룹·버전에 대해 발행하는 <b>OpenAPI 스키마</b>에서 온다.
+0021의 CRD가 <code>openAPIV3Schema</code> 로 커스텀 리소스의 필드·타입을 정의한 것과 <b>정확히 같은 뿌리</b>다 —
+빌트인 리소스는 쿠버네티스가 그 스키마를 내장하고, CRD는 여러분이 직접 써 넣을 뿐. 그래서 CRD를 등록하면
+<code>kubectl explain crontab.spec</code> 도 바로 동작한다. <b>explain = "이 kind는 어떤 필드를 갖나"를 스키마에서 걸어 내려가는 도구</b>.
+</div>
+
+<div class="note"><b>버전을 명시해 explain 하기:</b> 같은 kind가 여러 버전을 가질 때 <code>kubectl explain ingress --api-version=networking.k8s.io/v1</code>
+처럼 버전을 못박아 스키마를 볼 수 있다. deprecated 버전과 stable 버전의 필드 차이를 비교할 때 유용하다.</div>
+
+<p><b>Aggregation layer·conversion webhook</b>(여러 API 버전 간 자동 변환, 외부 API server 붙이기)은 CKA 심화 —
+KCNA/이 트랙에선 "그런 확장 지점이 있다"는 이름만 알면 충분하다. 오늘의 핵심은 <b>매니페스트 첫 줄을 읽고, 세 명령으로 API 지도를 걷는 것</b>.</p>
+
+<h2>6. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. <code>apiVersion: v1</code> (그룹명 없이 <code>v1</code>) 로 표현되는 리소스는 어느 그룹에 속하는가?</p>
+  <div class="opts">
+    <button class="opt">apps 그룹 — Deployment·StatefulSet이 여기 있다</button>
+    <button class="opt" data-correct="true">Core(레거시) 그룹 — 그룹 이름이 빈 문자열("")이라 <code>v1</code> 만 쓴다 (Pod·Service·ConfigMap)</button>
+    <button class="opt">networking.k8s.io 그룹 — 그룹명이 생략된 축약형이다</button>
+  </div>
+  <div class="explain">그룹명 없이 <code>v1</code> 인 것들(Pod·Service·ConfigMap·Namespace)은 초창기부터 있던 Core 그룹 소속이고, 그 그룹의 이름은 빈 문자열이다. Deployment는 나중에 apps 그룹으로 묶여 <code>apps/v1</code> 이 됐다. <code>kubectl api-resources</code> 의 APIVERSION 컬럼으로 언제든 확인 가능.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. 매니페스트에서 <code>apiVersion: something.k8s.io/v1alpha1</code> 을 봤다. 이 버전에 대해 옳은 설명은?</p>
+  <div class="opts">
+    <button class="opt">stable 버전이므로 하위호환이 보장되어 프로덕션에 안전하다</button>
+    <button class="opt" data-correct="true">alpha 단계 — 기본으로 꺼져 있고 하위호환 보장이 없어 필드가 바뀌거나 사라질 수 있다 (프로덕션 금지)</button>
+    <button class="opt">beta 버전이라 기본으로 켜져 있고 절대 바뀌지 않는다</button>
+  </div>
+  <div class="explain">버전 문자열이 성숙도를 말한다: <code>v1alpha1</code>=실험(기본 off, 예고 없이 변경/제거 가능), <code>v1beta1</code>=검증 중(바뀔 수 있음), <code>v1</code>=stable(하위호환 보장, 제거는 사전 공지). alpha는 프로덕션에 의존하면 안 된다. 이건 0021 CRD의 served/storage 버전 성숙과 같은 개념이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0010·0021 복습) 오래된 튜토리얼의 <code>apiVersion: extensions/v1beta1</code> Ingress를 요즘 클러스터에 apply했더니 거부됐다. 왜이고, 무엇이 이를 가능케 하는 구조인가?</p>
+  <div class="opts">
+    <button class="opt">클러스터에 Ingress 컨트롤러가 없어서 — apiVersion과는 무관하다</button>
+    <button class="opt" data-correct="true">Ingress가 <code>networking.k8s.io/v1</code> 로 옮겨가며 옛 <code>extensions/v1beta1</code> 이 deprecation 정책에 따라 제거됐기 때문. API 그룹 구조 덕분에 각 그룹이 독립적으로 버저닝·이동할 수 있다</button>
+    <button class="opt">v1beta1은 항상 v1보다 우선하므로 두 버전이 충돌해 거부됐다</button>
+  </div>
+  <div class="explain">Ingress는 <code>extensions/v1beta1</code> → <code>networking.k8s.io/v1beta1</code> → <code>networking.k8s.io/v1</code> 로 그룹·버전을 옮겼고(0010), 옛 버전은 사전 공지 후 제거됐다(deprecation 정책). 이런 독립적 이동이 가능한 건 API가 그룹의 집합으로 모듈화돼 있고 각 그룹이 따로 버저닝되기 때문 — CRD(0021)가 새 그룹을 추가하는 것과 같은 구조 위에 있다. 해결은 apiVersion을 최신 stable로 갱신하는 것.</div>
+</div>
+
+<hr>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">이 주제는 문자열이 헷갈리기 쉽다. 궁금한 것만 펼쳐 보면 된다.</p>
+
+<details class="faq">
+<summary><code>apiVersion</code> 하고 <code>kind</code>, 왜 둘 다 필요해요?</summary>
+<div class="a"><p><code>kind</code> 만으로는 어느 그룹·버전의 스키마로 해석할지 모른다. 예를 들어 <code>Ingress</code> 는 옛 <code>extensions/v1beta1</code> 과 지금 <code>networking.k8s.io/v1</code> 이 <b>필드 구조가 다르다</b>. <code>apiVersion</code> 이 "이 오브젝트를 정확히 어느 버전의 규칙으로 읽어라"를 못박아 주기 때문에 둘 다 필요하다. 좌표(apiVersion) + 명사(kind) 조합이라고 보면 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Core 그룹 이름이 "빈 문자열"이라는 게 무슨 뜻이에요?</summary>
+<div class="a"><p>말 그대로 그룹명이 <b>없다</b>. 그래서 <code>apiVersion</code> 에 <code>&lt;group&gt;/&lt;version&gt;</code> 대신 버전만(<code>v1</code>) 쓴다. RBAC의 <code>Role</code> 에서 Core 리소스에 권한을 줄 때 <code>apiGroups: [""]</code>(빈 문자열)로 쓰는 것도 이 때문이다(0008). Pod·Service 같은 원조 리소스가 여기 속하고, 하위호환을 위해 이 형태를 유지한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>같은 kind가 apiVersion만 다를 수 있나요?</summary>
+<div class="a"><p>있다. <code>Ingress</code> 가 대표적 — 시기에 따라 <code>extensions/v1beta1</code>, <code>networking.k8s.io/v1beta1</code>, <code>networking.k8s.io/v1</code> 세 apiVersion으로 존재했다. API server가 버전 간 <b>변환</b>을 해줘서, 클러스터가 여러 버전을 동시에 제공(served)하다가 옛 버전을 제거하는 식으로 옮겨간다. 그래서 "어떤 apiVersion을 써야 하나"는 클러스터 버전에 달렸고, <code>kubectl explain &lt;kind&gt;</code> 로 현재 권장 버전을 확인한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>alpha / beta / stable, 실무에서 어떻게 판단해요?</summary>
+<div class="a"><p><b>stable(<code>v1</code>)</b>: 안심하고 프로덕션에 쓴다. <b>beta(<code>v1beta1</code>)</b>: 기능이 거의 완성됐지만 필드가 바뀔 수 있으니 신중히, 업그레이드 노트를 챙긴다. <b>alpha(<code>v1alpha1</code>)</b>: 기본 off이고 예고 없이 사라질 수 있으니 <b>테스트/실험에만</b>. "기능이 존재한다"와 "안전하게 의존해도 된다"는 다르다 — 버전 문자열이 그 경계다.</p></div>
+</details>
+
+<details class="faq">
+<summary>왜 Deployment는 <code>apps/v1</code> 인데 Pod는 <code>v1</code> 이에요? 둘 다 워크로드잖아요?</summary>
+<div class="a"><p>Pod는 쿠버네티스 초창기 Core 리소스라 그룹명이 없다(<code>v1</code>). Deployment·StatefulSet·DaemonSet·ReplicaSet은 나중에 <b>apps 그룹</b>으로 묶여 추가됐다. 같은 "워크로드"라도 API에 들어온 시기와 그룹이 달라 apiVersion이 다르다. 외우기보다 <code>kubectl api-resources</code> 의 APIVERSION 컬럼으로 확인하는 습관이 낫다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>kubectl apply</code> 할 때 뜨는 "deprecated" 경고, 무시해도 되나요?</summary>
+<div class="a"><p>당장은 동작하지만 <b>무시하면 안 된다</b>. 경고는 "이 apiVersion은 곧 제거되니 새 버전으로 옮겨라"는 사전 공지다. 방치하면 다음 클러스터 업그레이드에서 <b>진짜로 apply가 실패</b>한다. 경고에 대개 대체 버전이 적혀 있으니(예: "use networking.k8s.io/v1"), 그걸로 <code>apiVersion</code> 을 갱신하고 다시 apply하면 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>kubectl api-resources</code> 와 <code>kubectl api-versions</code> 는 뭐가 달라요?</summary>
+<div class="a"><p><b><code>api-resources</code></b> 는 <b>리소스(kind) 목록</b>을 준다 — 각 kind가 어느 apiVersion에, namespaced인지, shortname은 뭔지. <b><code>api-versions</code></b> 는 <b>그룹/버전 목록</b>을 준다 — 이 클러스터에 어떤 group/version이 설치돼 있나. 전자는 "무엇을 만들 수 있나(명사)", 후자는 "어떤 API 표면이 있나(좌표)"라고 보면 된다. 둘 다 5절 실습에서 직접 쳐봤다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>kubectl explain</code> 은 어디서 그 정보를 가져와요?</summary>
+<div class="a"><p>API server가 발행하는 <b>OpenAPI 스키마</b>에서 가져온다. 각 그룹·버전마다 "이 kind는 어떤 필드를 갖고 타입이 뭔지"가 스키마로 정의돼 있고, <code>explain</code> 은 그걸 사람이 읽게 풀어준다. 0021의 CRD가 <code>openAPIV3Schema</code> 로 커스텀 리소스 스키마를 써 넣은 것과 같은 뿌리 — 그래서 CRD를 등록하면 <code>kubectl explain</code> 이 커스텀 리소스에도 바로 동작한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>CRD(0021)가 "새 그룹을 추가한다"는 게 이 레슨과 어떻게 이어져요?</summary>
+<div class="a"><p>직접 이어진다. CRD의 <code>spec.group</code> 에 <code>stable.example.com</code> 을 적으면, 그 순간 <code>kubectl api-versions</code> 목록에 <code>stable.example.com/v1</code> 이 <b>새 그룹으로 등장</b>한다. 즉 API가 그룹의 집합으로 설계돼 있어서, 코어를 안 건드리고 그룹을 무한히 붙일 수 있다. cert-manager는 <code>cert-manager.io</code>, Prometheus Operator는 <code>monitoring.coreos.com</code> 그룹을 각자 추가한다 — 이 레슨의 "그룹 구조"가 0021의 확장성이 가능한 이유다.</p></div>
+</details>
+
+<details class="faq">
+<summary>aggregation layer, conversion webhook은 꼭 알아야 하나요?</summary>
+<div class="a"><p>KCNA/이 트랙 범위에선 <b>이름만</b> 알면 된다. <b>conversion webhook</b> = 같은 kind의 여러 버전(v1beta1↔v1) 사이를 자동 변환해 주는 확장 지점. <b>aggregation layer</b> = 쿠버네티스 API server 뒤에 <b>외부 API server</b>를 붙여 새 API를 제공하는 방법(metrics-server가 이걸 쓴다). 둘 다 API를 확장하는 심화 메커니즘으로, 자세한 건 CKA 몫이다. "그런 확장 지점이 있다"는 지도만 챙기면 충분.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/reference/using-api/">공식 문서: Kubernetes API overview</a> ·
+<a href="https://kubernetes.io/docs/reference/using-api/#api-groups-and-versioning">API groups and versioning</a> ·
+<a href="https://kubernetes.io/docs/reference/using-api/deprecation-policy/">Deprecation Policy</a> ·
+<a href="https://kubernetes.io/docs/reference/using-api/deprecation-guide/">Deprecated API Migration Guide (Ingress 이동 등 실제 표)</a> —
+매니페스트 첫 줄이 헷갈리면 API overview를, 버전이 언제 사라지는지는 deprecation guide를 본다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "metrics-server의 <code>metrics.k8s.io</code> 는 aggregation layer로 어떻게 붙나?",
+"한 클러스터에 v1beta1과 v1이 동시에 존재할 때 storage 버전은 어떻게 정해지나?",
+"내 CRD를 v1beta1에서 v1로 승격하려면 뭘 바꿔야 하나?" — 이 심화 갈래들도 원하면 짧게 붙일 수 있다.
+</div>
+
+<nav class="nav">
+  <a href="0026-owner-references-gc-finalizers.html">← 0026 ownerRef·GC</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

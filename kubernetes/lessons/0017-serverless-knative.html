@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0017 — Serverless 와 Knative: 안 쓰면 0으로</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0017 <span class="tag">심화 · Architecture</span></p>
+<h1>Serverless 와 Knative: 안 쓰면 0으로</h1>
+<p class="subtitle">"서버가 없다"가 아니라 "서버를 신경 안 쓴다". 0012 의 HPA 가 <b>못 하는 것</b> — Pod 를 0 까지 내렸다 첫 요청에 되살리기 — 을 Knative 가 어떻게 하는지 파본다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> <b>scale-to-zero</b> 라는 단 하나의 차별점을 이해한다 —
+요청이 없으면 Pod 가 <b>0 개</b>가 되고(유휴 비용 0), 첫 요청이 오면 <em>그때</em> 켜진다.
+0012 의 HPA(보통 항상 1 개 이상)와 정확히 어디서 갈라지는지, 그 대가(<b>cold start</b>)가 뭔지가
+여기서 풀린다.
+</div>
+
+<h2>0. 한눈에 — 세 문장</h2>
+
+<div class="aha">
+<span class="label">딱 이 세 줄</span>
+<p><b>Serverless = 서버를 신경 안 쓴다.</b> 서버가 사라지는 게 아니라, <u>용량·스케일링·유휴 관리</u>를 내가 안 하고 플랫폼에 맡긴다. 이벤트/요청이 오면 돌고, 안 오면 <b>0 으로</b> 내려가고, <b>쓴 만큼만</b> 낸다.</p>
+<p><b>Knative Serving = 쿠버네티스 위에 얹는 serverless 층.</b> 요청량에 따라 Pod 수를 자동 조절하는데, 핵심은 다른 오토스케일러가 못 하는 <b>0 까지</b> 내렸다 <b>첫 요청에 되살리기</b>.</p>
+<p><b>대가는 cold start.</b> 0 에서 깨어날 땐 Pod 를 새로 띄우느라 첫 요청이 <b>느리다</b>. 유휴 비용 0 을 얻는 대신 첫 손님을 기다리게 하는 트레이드오프.</p>
+</div>
+
+<h2>1. Serverless 란 — "서버가 없다"가 아니다</h2>
+
+<p><b>Serverless</b> 는 이름이 오해를 부른다. 서버는 여전히 있다 — 어딘가의 노드에서 컨테이너가 돈다.
+바뀌는 건 <b>누가 그 서버를 신경 쓰느냐</b>다. 세 가지 특성으로 정의된다:</p>
+
+<table class="cmp">
+<tr><th>특성</th><th>뜻</th><th>내가 안 하는 일</th></tr>
+<tr><td><b>서버 관리 위임</b></td><td>용량·프로비저닝을 플랫폼이 함</td><td>"노드 몇 대? replicas 몇 개?" 고민 안 함</td></tr>
+<tr><td><b>이벤트/요청 구동</b></td><td>요청·이벤트가 있을 때만 실행</td><td>"항상 켜둬야 하나?" 안 함</td></tr>
+<tr><td><b>scale-to-zero</b></td><td>안 쓰면 <b>0 개</b>로 내려감</td><td>유휴 시간에 노는 Pod 를 안 굴림</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — 0009 의 가정이 여기서 깨진다</span>
+<b>0009 의 워크로드 4 형제</b>(Deployment·StatefulSet·DaemonSet·Job)는 대부분 "<u>항상 도는 복제본</u>"을 전제로 했다 —
+Deployment 는 replicas 만큼 Pod 를 <b>계속</b> 유지한다. Serverless 는 그 전제를 뒤집는다:
+<b>요청이 없으면 유지할 복제본도 0 개</b>다. "일이 없으면 아무것도 안 돈다"가 핵심 발상이다.
+</div>
+
+<div class="note">한 줄 기억법: <b>"서버가 없다"(X) → "서버를 신경 안 쓴다"(O).</b> 청구서에 idle 요금이 안 찍히는 게 체감 차이다.</div>
+
+<h2>2. Knative Serving — scale-to-zero 라는 차별점</h2>
+
+<p><b>Knative</b> 는 쿠버네티스 위에 얹어 serverless 워크로드를 굴리는 CNCF 프로젝트다.
+두 부분으로 나뉜다 — 이번 레슨의 주인공은 <b>Serving</b>이다:</p>
+
+<table class="cmp">
+<tr><th>구성</th><th>하는 일</th></tr>
+<tr><td><b>Knative Serving</b></td><td>HTTP <b>요청량</b>에 따라 Pod 를 자동 스케일. 핵심 = <b>0↔N</b> 오토스케일링</td></tr>
+<tr><td><b>Knative Eventing</b></td><td><b>이벤트</b>를 라우팅 (소스→브로커→구독). 요청이 아니라 이벤트로 구동</td></tr>
+</table>
+
+<p>Serving 의 결정적 차별점은 하나다: <b>scale-to-zero</b>. 요청이 한동안 없으면
+Pod 수를 <b>0 개</b>까지 내리고, <b>첫 요청이 도착하면 그때 Pod 를 기동</b>한다.
+이걸 가능하게 하는 숨은 조연이 <b>activator</b>다 — Pod 가 0 개일 때 요청을
+<u>대신 받아 붙잡아 두고</u>, Pod 가 뜰 때까지 기다렸다 넘겨준다.</p>
+
+<div class="aha">
+<span class="label">0007 의 제어 루프, 요청량 버전</span>
+Knative 오토스케일러(KPA)도 결국 <b>0007 의 제어 루프</b>다 — "원하는 상태(요청량에 맞는 Pod 수)"와
+"현재 상태"를 계속 맞춘다. 차이는 <b>신호가 CPU 가 아니라 동시 요청 수(concurrency)</b>이고,
+<b>원하는 값이 0 이 될 수 있다</b>는 점뿐이다.
+</div>
+
+<p><b>Knative Eventing</b>은 한 문단으로: 요청(HTTP) 대신 <b>이벤트</b>로 구동하는 세계다.
+이벤트 <b>소스</b>(예: 메시지 큐, 타이머)가 이벤트를 만들면 <b>브로커(broker)</b>가 받아
+<b>구독(trigger)</b> 조건에 맞는 서비스로 전달한다. 0014 에서 말한 <b>느슨한 결합</b>의 구현체 —
+보내는 쪽은 받는 쪽을 몰라도 된다.</p>
+
+<h2>3. 결정적 대비 — HPA(0012) vs Knative</h2>
+
+<p><b>0012 의 HPA</b>는 CPU/메모리 등 메트릭을 보고 replicas 를 늘리고 줄였다.
+하지만 보통 <code>minReplicas</code> 가 <b>1 이상</b> — <u>항상 최소 1 개는 켜져 있다</u>.
+Knative 는 그 바닥을 <b>0 까지</b> 뚫는다:</p>
+
+<table class="cmp">
+<tr><th></th><th>HPA (0012)</th><th>Knative Serving</th></tr>
+<tr><td>스케일 신호</td><td>CPU·메모리·커스텀 메트릭</td><td>동시 요청 수(concurrency)·RPS</td></tr>
+<tr><td>최소 Pod 수</td><td>보통 <b>minReplicas ≥ 1</b> (항상 켜짐)</td><td><b>0 까지</b> 내려감</td></tr>
+<tr><td>요청 없을 때</td><td>1 개는 계속 돌며 대기 (idle 비용 발생)</td><td>0 개 — 아무것도 안 돎 (idle 비용 0)</td></tr>
+<tr><td>첫 요청</td><td>이미 켜져 있어 <b>즉시</b> 응답</td><td>Pod 를 새로 띄움 → <b>cold start 지연</b></td></tr>
+<tr><td>대상</td><td>기존 Deployment 에 얹음</td><td>Knative Service(<code>Revision</code>) 단위</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">한 줄 구분</span>
+<b>HPA 는 "1 개와 N 개 사이"를 오간다. Knative 는 "0 개와 N 개 사이"를 오간다.</b>
+그 <b>0 이 되느냐</b>가 serverless 인지 아닌지를 가르는 선이다. HPA 로도 트래픽엔 잘 대응하지만,
+"쓰지 않는 시간에 Pod 를 완전히 끄기"는 HPA 단독으론 못 한다.
+</div>
+
+<h2>4. Cold start — scale-to-zero 의 대가</h2>
+
+<p>공짜 점심은 없다. Pod 가 0 개일 때 첫 요청이 오면, 쿠버네티스는 그 순간
+<b>Pod 를 스케줄→이미지 풀(있으면 캐시)→컨테이너 시작→앱 초기화</b>를 거친다.
+이 시간만큼 <b>첫 요청이 느려진다</b> — 이게 <b>cold start</b>다.</p>
+
+<table class="cmp">
+<tr><th></th><th>Cold start (0 에서 깨어남)</th><th>Warm (이미 켜져 있음)</th></tr>
+<tr><td>첫 요청 지연</td><td><b>큼</b> (Pod 기동 시간이 얹힘)</td><td>작음 (바로 처리)</td></tr>
+<tr><td>비용</td><td>유휴 비용 <b>0</b></td><td>유휴에도 비용 발생</td></tr>
+</table>
+
+<div class="warn">
+<b>트레이드오프를 정직하게.</b> scale-to-zero 는 <b>유휴 비용 0</b> 을 얻는 대신 <b>첫 손님을 기다리게</b> 한다.
+그래서 "가끔 오는 트래픽·내부 도구·이벤트 처리"엔 이상적이지만, "밀리초가 중요한 항상 켜진 API"엔
+<code>minScale=1</code> 로 바닥을 1 로 올리기도 한다 — 그 순간 scale-to-zero 를 포기하고 HPA 에 가까워진다.
+선택의 문제지 정답이 하나가 아니다.
+</div>
+
+<h2>5. FaaS vs Knative — 함수 단위 vs 컨테이너 단위</h2>
+
+<p>Serverless 를 들으면 흔히 <b>AWS Lambda</b> 같은 <b>FaaS</b>(Function as a Service)를 떠올린다.
+Knative 와 무엇이 다른지 한 줄로 나눈다:</p>
+
+<table class="cmp">
+<tr><th></th><th>FaaS (Lambda, OpenFaaS)</th><th>Knative</th></tr>
+<tr><td>배포 단위</td><td><b>함수</b> 하나 (핸들러 코드)</td><td><b>컨테이너</b> 하나 (OCI 이미지)</td></tr>
+<tr><td>실행 모델</td><td>이벤트당 함수 호출</td><td>요청/이벤트에 컨테이너가 응답</td></tr>
+<tr><td>포장</td><td>런타임에 코드 조각을 올림</td><td>0014 의 OCI 이미지 그대로</td></tr>
+<tr><td>이식성</td><td>대체로 벤더 종속적</td><td>쿠버네티스 있으면 어디서나(CNCF)</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하</span>
+<b>FaaS = 함수를 올린다. Knative = 컨테이너를 올린다.</b> Knative 는 이미 쓰던
+<b>OCI 이미지</b>(0014)를 그대로 serverless 화한다 — 새 프로그래밍 모델을 배울 필요가 없고,
+벤더에 묶이지도 않는다. "쿠버네티스 위의 serverless" 라는 포지션이 여기서 나온다.
+</div>
+
+<h2>6. 왜 Architecture 도메인인가</h2>
+
+<p>KCNA 에서 serverless/Knative 는 <b>Cloud Native Architecture</b> 도메인에 속한다.
+왜냐하면 이것이 <b>느슨한 결합·탄력성</b>이라는 클라우드 네이티브 원칙의 <b>극단적 실현</b>이기 때문이다.</p>
+
+<div class="aha">
+<span class="label">0014 의 12-factor 와 이어진다</span>
+<p>scale-to-zero 가 <b>가능하려면 앱이 stateless·disposable 해야 한다</b> —
+0014 의 <b>12-factor</b> 원칙 그대로다. Pod 를 아무 때나 0 으로 죽였다 되살리려면,
+그 Pod 안에 <u>잃으면 안 되는 상태</u>가 없어야 한다(상태는 0011 의 PV 나 외부 저장소에).</p>
+<p>0002 에서 "Pod 는 ephemeral(언제든 교체)"라고 배운 그 성질이, 여기선 <b>기능</b>이 된다 —
+언제든 죽여도 되니까 안 쓸 때 0 으로 죽일 수 있는 것이다. <b>disposability 가 scale-to-zero 의 전제조건</b>이다.</p>
+</div>
+
+<div class="note"><b>성숙도 한 줄(0014):</b> Knative 는 CNCF Incubating 단계를 거쳐 성장한 프로젝트다.
+"graduated 만큼 보편적이진 않지만 실사용처가 탄탄한" 위치 — KCNA 는 이름·역할·scale-to-zero 개념까지면 충분하다.</div>
+
+<div class="note"><b>비용 예고(0019):</b> scale-to-zero 의 진짜 매력은 돈이다 — <b>유휴 비용 0</b>.
+안 쓰는 시간에 청구서가 안 늘어난다. 이 "쓴 만큼만" 모델이 비용 최적화와 어떻게 엮이는지는 <b>0019 비용 레슨</b>에서 다룬다.</div>
+
+<h2>7. 개념 트레이스 — 첫 요청이 0 을 깨우는 여정</h2>
+
+<div class="warn">
+<b>정직한 고지:</b> Knative <b>설치·운영</b>은 KCNA 범위를 넘는 <b>CKAD+ 영역</b>이다(CRD 설치, networking layer 구성 등).
+그래서 여기선 손으로 깔지 않는다. 대신 0013 스타일로 <b>"요청 0 → 응답"까지 한 요청의 여정</b>을 개념으로 따라간다 —
+이 그림이 scale-to-zero 의 전부다.</div>
+
+<div class="cluster"><span class="ctx">scale-to-zero 를 깨우는 한 요청의 일생</span>
+<span class="out">  <span class="hl">초기 상태: 요청이 한동안 없었다</span>
+       │
+  ① Pod 0 개               Revision 의 replicas = <span class="hl">0</span>. 아무것도 안 돎 (idle 비용 0)
+       │                    └ HPA 라면 여기서도 1 개는 살아있었을 자리
+       ▼
+  ② 첫 curl 도착            사용자: <span class="hl">curl http://hello.default.example.com</span>
+       │
+  ③ activator 가 붙잡음      Pod 가 0 이라 요청이 <b>activator</b> 로 라우팅됨
+       │                    └ activator: 요청을 <u>버퍼에 붙잡아 두고</u> 응답을 미룸
+       ▼
+  ④ 오토스케일러에 신호       "요청 왔다!" → KPA 가 원하는 replicas 를 <span class="hl">0 → 1</span> 로
+       │                    └ 0007 의 제어 루프: desired ≠ current 이면 맞춘다
+       ▼
+  ⑤ Pod 1 개 기동           스케줄 → 컨테이너 시작 → 앱 준비(readiness)
+       │                    └ <span class="hl">이 시간이 cold start 지연</span>
+       ▼
+  ⑥ activator 가 넘겨줌       Pod 가 Ready 되면 붙잡아 둔 요청을 그 Pod 로 전달
+       │
+  ⑦ 응답                    <span class="hl">Hello World!</span>  ← 첫 요청은 느렸지만 성공
+       │
+  ⑧ 이후 요청 warm          Pod 가 살아있는 동안은 빠름. 트래픽 멈추면 다시 ① 로 (0 으로 회귀)</span>
+</div>
+
+<div class="aha">
+<span class="label">activator 가 핵심 트릭이다</span>
+<p>scale-to-zero 가 <b>요청을 잃지 않는</b> 비결은 ③ 의 <b>activator</b>다.
+Pod 가 0 개일 때 요청이 그냥 실패하면 쓸모가 없다. activator 는 첫 요청을
+<u>대신 받아 붙잡아 두고</u>, Pod 가 뜨는 동안 기다렸다 넘겨준다 —
+그래서 사용자는 "느렸다"고 느낄 뿐 "실패했다"고 느끼지 않는다.</p>
+<p>트래픽이 충분히 오르면 activator 는 경로에서 빠지고(warm 상태), 요청이 끊기면
+다시 0 으로 내려가며 activator 가 재등장한다. <b>0↔N 을 오가는 문지기</b>인 셈이다.</p>
+</div>
+
+<div class="note">KCNA 는 activator/KPA 의 <b>내부 구현</b>까지는 안 묻는다 — "scale-to-zero 가 되고, 그 대가로 cold start 가 있다"만 알면 된다.
+위 트레이스는 <b>왜</b> 그런지 이해를 위한 심화(그래서 <span class="tag">심화</span> 태그)다.</div>
+
+<h2>8. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. "serverless"의 가장 정확한 설명은?</p>
+  <div class="opts">
+    <button class="opt">물리 서버 없이 브라우저 안에서만 코드가 실행된다</button>
+    <button class="opt" data-correct="true">서버는 여전히 있지만 용량·스케일링·유휴 관리를 플랫폼에 위임하고, 안 쓰면 0 으로 내려가 쓴 만큼만 낸다</button>
+    <button class="opt">서버를 한 번 켜두면 절대 꺼지지 않고 항상 대기한다</button>
+  </div>
+  <div class="explain">"서버가 없다"가 아니라 "서버를 신경 안 쓴다"이다. 서버는 존재하되 용량·스케일링을 내가 관리하지 않고, 요청/이벤트로 구동되며, scale-to-zero 로 유휴 시 0 이 되고, 쓴 만큼만 과금된다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. (레슨 0012 복습) Knative Serving 이 HPA 와 갈라지는 <b>결정적</b> 차이는?</p>
+  <div class="opts">
+    <button class="opt">Knative 는 CPU 를, HPA 는 메모리를 본다는 점</button>
+    <button class="opt" data-correct="true">HPA 는 보통 minReplicas ≥ 1 로 항상 켜져 있지만, Knative 는 Pod 를 0 까지 내렸다 첫 요청에 되살린다는 점</button>
+    <button class="opt">Knative 는 노드를 늘리고 HPA 는 Pod 를 늘린다는 점</button>
+  </div>
+  <div class="explain">HPA 는 "1 개와 N 개 사이"를, Knative 는 "0 개와 N 개 사이"를 오간다. 그 0 이 되느냐가 serverless 의 핵심선이다. (노드를 늘리는 건 Cluster Autoscaler — 0012.)</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. scale-to-zero 를 켠 Knative 서비스에서 오랜만에 온 첫 요청이 느린 이유는?</p>
+  <div class="opts">
+    <button class="opt">Knative 가 보안 검사를 위해 첫 요청을 일부러 지연시킨다</button>
+    <button class="opt">DNS 가 Knative 서비스 이름을 못 찾아 재시도하기 때문이다</button>
+    <button class="opt" data-correct="true">Pod 가 0 개였다가 그 요청 때문에 새로 기동되며, 그 기동 시간(cold start)이 첫 응답에 얹히기 때문이다</button>
+  </div>
+  <div class="explain">cold start: Pod 0 개 상태에서 activator 가 요청을 붙잡아 두고 오토스케일러가 0→1 로 올려 Pod 를 새로 띄운다. 그 스케줄·시작·초기화 시간만큼 첫 요청이 느려진다 — 유휴 비용 0 의 대가다. 이후 warm 상태에선 빠르다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2·Q3 를 맞히면 Architecture 도메인의 serverless 조각이 <b>개념 수준으로 ✅</b> —
+"serverless 특성 · Knative 역할 · scale-to-zero · event-driven · cold start" 라는 KCNA 체크리스트가 채워진다.
+다음은 <b>0018</b> 로 이어지고, scale-to-zero 의 <b>비용</b> 이야기는 <b>0019</b> 에서 매듭짓는다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">이름은 낯설어도 개념은 단순하다 — "안 쓰면 0". 궁금한 것만 펼쳐 보면 된다.</p>
+
+<details class="faq">
+<summary>그래서 서버가 진짜로 없는 거예요, 있는 거예요?</summary>
+<div class="a"><p>있다. 어딘가의 노드에서 컨테이너가 돈다. 바뀌는 건 <b>내가 그 서버를 신경 쓰느냐</b>다 — "노드 몇 대 살까, replicas 몇으로 둘까, 유휴에 뭘 끌까"를 내가 안 하고 플랫폼에 맡긴다. "serverless"는 "server-less(서버 없음)"가 아니라 "server 관리에서 나를 free 하게"라고 읽는 게 맞다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Knative 랑 그냥 Deployment(0002) 는 뭐가 달라요?</summary>
+<div class="a"><p>Deployment 는 replicas 만큼 Pod 를 <b>계속</b> 유지한다 — 요청이 없어도 그 수만큼 돈다(0009 의 "항상 도는 복제본"). Knative Service 는 요청량에 따라 자동 스케일하고, 특히 요청이 없으면 <b>0 개</b>까지 내린다. "항상 켜둠"과 "필요할 때만 켬"의 차이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>HPA 로도 오토스케일 되잖아요? 왜 Knative 가 따로 필요해요?</summary>
+<div class="a"><p>HPA(0012)는 트래픽 대응은 잘 하지만 보통 <b>minReplicas 가 1 이상</b>이라 "완전히 끄기"를 못 한다. 항상 최소 1 개는 idle 비용을 먹는다. Knative 는 그 바닥을 0 으로 뚫는다 — 안 쓰는 시간엔 아무것도 안 돌아 유휴 비용이 0 이 된다. 그 대가가 cold start 다.</p></div>
+</details>
+
+<details class="faq">
+<summary>cold start 는 얼마나 느린 거예요? 몇 초씩 걸려요?</summary>
+<div class="a"><p>앱과 이미지에 따라 다르다 — 이미지가 노드에 캐시돼 있고 앱 초기화가 가벼우면 수백 ms, 무거운 앱·큰 이미지면 몇 초까지 간다. 핵심은 <b>절대값이 아니라 트레이드오프</b>다: "가끔 오는 트래픽에 유휴 비용 0"이 좋으면 감수하고, "매 요청이 빨라야" 하면 <code>minScale=1</code> 로 바닥을 올린다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>minScale=1</code> 로 바닥을 올리면 그거 그냥 Deployment 아니에요?</summary>
+<div class="a"><p>거의 그렇다 — scale-to-zero 를 포기하면 "항상 1 개 이상"이라 HPA+Deployment 에 가까워진다. 그래도 Knative 는 요청 기반 스케일·리비전 관리·트래픽 분할 같은 기능은 남는다. 요점: <b>scale-to-zero 는 켜고 끌 수 있는 선택지</b>이지 강제가 아니다.</p></div>
+</details>
+
+<details class="faq">
+<summary>FaaS(Lambda)랑 Knative, 하나만 알아야 하면 뭘?</summary>
+<div class="a"><p>KCNA 는 <b>구분</b>만 물으면 충분하다: FaaS = <b>함수</b> 단위(코드 핸들러를 올림, 대체로 벤더 종속), Knative = <b>컨테이너</b> 단위(OCI 이미지를 그대로 serverless 화, CNCF 라 이식성 좋음). "둘 다 serverless 인데 배포 단위가 함수냐 컨테이너냐"가 한 줄 정답.</p></div>
+</details>
+
+<details class="faq">
+<summary>scale-to-zero 하려면 앱이 stateless 여야 한다는 게 무슨 말이에요?</summary>
+<div class="a"><p>Pod 를 아무 때나 0 으로 죽였다 되살리는 게 scale-to-zero 다. 만약 Pod 안(메모리·로컬 디스크)에 <b>잃으면 안 되는 상태</b>가 있으면, 0 으로 죽이는 순간 그게 날아간다. 그래서 상태는 밖(0011 의 PV, DB, 캐시)에 두고 Pod 는 언제 죽어도 되게(disposable, 0014 의 12-factor) 만들어야 한다. <b>stateless 가 scale-to-zero 의 전제</b>다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Knative Eventing 은 Serving 이랑 뭐가 달라요?</summary>
+<div class="a"><p><b>Serving</b> = <b>HTTP 요청</b>에 응답하고 요청량으로 스케일(0↔N). <b>Eventing</b> = <b>이벤트</b>로 구동 — 소스(큐·타이머 등)가 이벤트를 내면 브로커가 받아 구독 조건에 맞는 서비스로 라우팅한다. Serving 이 "요청 오면 돈다"면 Eventing 은 "이벤트 오면 돈다". 느슨한 결합(0014)의 구현체다.</p></div>
+</details>
+
+<details class="faq">
+<summary>activator 가 정확히 뭐예요? 왜 필요해요?</summary>
+<div class="a"><p>Pod 가 0 개일 때 첫 요청을 <b>대신 받아 붙잡아 두는</b> Knative 컴포넌트다. 없으면 Pod 0 개 상태의 요청은 그냥 실패한다. activator 가 요청을 버퍼에 잡아두고, 오토스케일러가 Pod 를 0→1 로 띄우는 동안 기다렸다, Pod 가 준비되면 넘겨준다. 덕분에 첫 요청은 "느릴 뿐 실패는 안 함". KCNA 깊이는 넘지만 scale-to-zero 를 이해하는 열쇠라 짚어둔다.</p></div>
+</details>
+
+<details class="faq">
+<summary>이거 실습으로 깔아봐야 하나요? KCNA 시험에 설치가 나와요?</summary>
+<div class="a"><p>아니다. Knative <b>설치·운영은 CKAD+ 영역</b>(CRD·networking layer 구성)이라 KCNA 에선 안 나온다. KCNA 는 <b>개념</b>만 묻는다 — serverless 특성, Knative 의 역할, scale-to-zero, event-driven, cold start. 그래서 이 레슨도 손으로 안 깔고 "요청 0 → 응답" 여정을 개념 트레이스로만 따라갔다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://knative.dev/docs/serving/">Knative Serving 공식 문서</a> — 오토스케일링·scale-to-zero·activator 의 원전.
+<a href="https://knative.dev/docs/serving/autoscaling/">Autoscaling</a> 으로 KPA/concurrency 를,
+<a href="https://knative.dev/docs/eventing/">Knative Eventing</a> 으로 소스→브로커→구독 모델을,
+<a href="https://github.com/cncf/curriculum">CNCF Curriculum (KCNA)</a> 로 시험 범위를 확인할 수 있다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "Knative 의 traffic split(카나리)은 어떻게 하나?", "KPA 랑 HPA 를 Knative 안에서 골라 쓸 수 있나?",
+"cold start 를 줄이는 실전 기법(pre-warm, minScale)은?" — 원하면 짧게 붙일 수 있다.
+</div>
+
+<nav class="nav">
+  <a href="0016-service-mesh.html">← 0016 서비스 메시</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

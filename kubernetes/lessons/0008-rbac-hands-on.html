@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0008 — RBAC: 거부를 부여로 뒤집기</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0008 <span class="tag">Level 1 · 실습</span></p>
+<h1>RBAC: 거부를 부여로 뒤집기</h1>
+<p class="subtitle">0007 에서 RBAC 답은 맞았지만 흔들렸다고 했다. 흔들림을 없애는 방법은 하나 — 직접 거부당해 보고, Role+Binding 으로 뒤집어 보는 것.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> ServiceAccount 하나가 <code>get pods</code> 를 <b>거부(no)</b>당하는 걸
+<code>kubectl auth can-i</code> 로 눈으로 보고, Role + RoleBinding 을 붙여 같은 명령이 <b>허용(yes)</b>으로
+뒤집히는 순간을 관찰한다. RBAC 이 "암기"에서 "근육"으로 바뀐다.
+</div>
+
+<div class="note">
+kind 클러스터 <code>mastery</code> 이어서 사용. 실습은 다시 전용 namespace <code>lab</code> 에서
+(0006 에서 들인 습관). 없으면: <code>kubectl create namespace lab</code>.
+</div>
+
+<h2>1. RBAC 의 세 조각 — 명사 · 동사 · 신원</h2>
+
+<table class="cmp">
+<tr><th>조각</th><th>역할</th><th>한 줄 정의</th></tr>
+<tr>
+  <td><b>Role</b> (명사)</td>
+  <td>권한 <em>목록</em></td>
+  <td>"이 namespace 에서 pods 를 get/list/watch 할 수 있다" — 아직 <b>아무에게도</b> 주지 않은 상태</td>
+</tr>
+<tr>
+  <td><b>RoleBinding</b> (동사)</td>
+  <td>부여</td>
+  <td>"이 주체(subject)에게 저 Role 을 준다" — 이게 있어야 비로소 권한이 성립</td>
+</tr>
+<tr>
+  <td><b>ServiceAccount</b> (신원)</td>
+  <td>Pod 의 주민등록</td>
+  <td>Pod 안 프로세스가 API server 에 자신을 증명하는 신원. 사람은 kubeconfig, Pod 는 SA</td>
+</tr>
+</table>
+
+<div class="aha">
+<span class="label">아하</span>
+Role 만 만들면 <b>아무 일도 일어나지 않는다</b>. 권한(명사)은 존재만으로는 무력하고,
+Binding(동사)이 주체와 이어줄 때만 살아난다. 실기 시험에서 "권한을 줬는데 안 먹혀요"의
+90% 는 <b>Binding 을 안 만든 것</b>이다. 오늘 이걸 손으로 각인한다.
+</div>
+
+<h2>2. 실습 — 거부 → 부여 → 경계</h2>
+
+<p><b>추적 1 — 신원을 만들고, 먼저 거부당한다.</b>
+비밀 병기는 <code>kubectl auth can-i</code> — 아무것도 실제로 하지 않고 "할 수 있나?"만 물어보는,
+RBAC 디버깅의 청진기다. <code>--as</code> 로 그 SA <em>인 척</em> 물어본다.</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl create serviceaccount reader -n lab</span>
+<span class="prompt">$</span> <span class="cmd">kubectl auth can-i get pods -n lab \
+    --as=system:serviceaccount:lab:reader</span>
+<span class="out"><span class="hl">no</span>          ← 새 SA 는 기본적으로 아무 권한도 없다</span>
+</div>
+
+<p>주체 이름의 형식을 기억하라: <code>system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;</code>.
+방금 만든 <code>reader</code> 는 신원만 있고 권한 목록이 비어 있어 <code>no</code> 다.</p>
+
+<p><b>추적 2 — Role 을 만들고 Binding 으로 뒤집는다.</b> <code>reader-rbac.yaml</code>:</p>
+
+<div class="cluster"><span class="ctx">reader-rbac.yaml</span>
+<span class="out">apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: lab
+  name: pod-reader
+rules:
+- apiGroups: [""]          <span class="hl"># "" = core API group (pods 가 여기 산다)</span>
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]   <span class="hl"># 읽기만, delete 는 일부러 뺀다</span>
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: lab
+  name: reader-can-read-pods
+subjects:                  <span class="hl"># 누구에게</span>
+- kind: ServiceAccount
+  name: reader
+  namespace: lab
+roleRef:                   <span class="hl"># 무엇을</span>
+  kind: Role
+  name: pod-reader
+  apiGroup: rbac.authorization.k8s.io</span>
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f reader-rbac.yaml</span>
+<span class="prompt">$</span> <span class="cmd">kubectl auth can-i get pods -n lab \
+    --as=system:serviceaccount:lab:reader</span>
+<span class="out"><span class="hl">yes</span>         ← Binding 이 명사(Role)와 주체(SA)를 이은 순간 뒤집혔다</span>
+</div>
+
+<p>같은 명령, 두 결과. 그 사이에 바뀐 것은 오직 <b>Binding 의 존재</b>다. 이것이 0007 Q7 의 정답
+"RoleBinding 이 연결하는 순간 성립"의 실물이다.</p>
+
+<p><b>추적 3 — 경계를 두 방향으로 두드린다.</b> 부여받은 것은 딱 그만큼이다.</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl auth can-i delete pods -n lab \
+    --as=system:serviceaccount:lab:reader</span>
+<span class="out"><span class="hl">no</span>          ← verbs 에 delete 를 안 넣었으니 거부. 동사 단위로 정확하다</span>
+<span class="prompt">$</span> <span class="cmd">kubectl auth can-i get pods -n default \
+    --as=system:serviceaccount:lab:reader</span>
+<span class="out"><span class="hl">no</span>          ← Role 은 lab namespace 안의 권한. default 에는 안 미친다</span>
+</div>
+
+<div class="warn">
+<b>두 번째 <code>no</code> 가 핵심이다.</b> Role 은 namespace 에 <b>갇힌</b> 권한이다 (0007 Q6).
+default namespace 의 pods 까지 읽게 하려면 거기에 또 Role+Binding 을 만들거나, 애초에
+<b>ClusterRole</b>(전역 권한) + ClusterRoleBinding 을 써야 한다. "왜 저쪽 namespace 에선 안 되죠?"의
+답이 바로 이 경계다.
+</div>
+
+<p>정리: <code>kubectl delete ns lab</code> — Role, RoleBinding, SA 까지 namespace 안의 모든 게 함께 사라진다.</p>
+
+<h2>3. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. <code>pod-reader</code> Role 은 이미 있는데 <code>auth can-i get pods</code> 가 여전히 <code>no</code> 다. 가장 먼저 의심할 것은?</p>
+  <div class="opts">
+    <button class="opt">Role 의 verbs 에 <code>get</code> 이 빠졌다</button>
+    <button class="opt" data-correct="true">그 SA 를 이 Role 에 잇는 RoleBinding 이 없다</button>
+    <button class="opt">SA 토큰이 만료되어 재발급이 필요하다</button>
+  </div>
+  <div class="explain">Role 은 명사, 존재만으로는 무력하다. 권한이 안 먹히는 실기 단골 원인은 Binding 누락 — <code>kubectl get rolebinding -n lab</code> 로 주체가 실제로 이어졌는지부터 확인한다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. <code>reader</code> 에게 <b>모든</b> namespace 의 pods 를 읽게 하려면?</p>
+  <div class="opts">
+    <button class="opt">Role 의 metadata 에서 namespace 필드를 지워 전역으로 만든다</button>
+    <button class="opt" data-correct="true">ClusterRole 을 만들고 ClusterRoleBinding 으로 SA 에 잇는다</button>
+    <button class="opt">RoleBinding 의 subjects 에 <code>namespace: "*"</code> 를 넣는다</button>
+  </div>
+  <div class="explain">경계는 namespace 다. Role 은 자기 namespace 를 못 벗어난다 — namespace 필드를 지운다고 전역이 되지 않는다(그냥 유효하지 않다). 전 namespace / 노드·PV 같은 무-namespace 리소스는 <b>ClusterRole</b> 의 영역이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0007 복습) 0002 에서 본 Deployment·ReplicaSet 의 제어 루프들이 <b>실제로 돌고 있는</b> 프로세스는?</p>
+  <div class="opts">
+    <button class="opt">각 노드의 kubelet — 노드마다 자기 몫의 루프를 돌린다</button>
+    <button class="opt">API server — etcd watch 를 받아 루프를 직접 실행한다</button>
+    <button class="opt" data-correct="true">컨트롤 플레인의 kube-controller-manager 한 프로세스</button>
+  </div>
+  <div class="explain">간격 반복(0007 Q4 재시험): Deployment·ReplicaSet·EndpointSlice 컨트롤러 등 수십 개 루프가 kube-controller-manager 하나에 모여 돈다. scheduler(배치 결정)도, kubelet(노드 실행)도 아닌, <em>desired ↔ actual 을 맞추는 조정 루프의 집</em>이다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2 를 맞히면 RBAC 은 갭 체크에서 ✅ 로 — 다음은 예고대로
+<b>워크로드 4형제</b>(StatefulSet / DaemonSet / Job / CronJob, "언제 Deployment 가 아닌가")로 넘어간다.
+Q3 은 0007 에서 유일하게 틀렸던 controller-manager 를 굳히는 재시험이다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">실습하다 떠오르는 "어? 이건 왜 이러지?"를 미리 모았다. 궁금한 것만 펼쳐 보면 된다 — 안 궁금하면 접힌 채 넘어가도 된다.</p>
+
+<details class="faq">
+<summary><code>--as</code> 를 붙이면 내가 그 SA 로 로그인되는 건가요?</summary>
+<div class="a"><p>아니다. <b>impersonation(가장)</b> — "내가 만약 저 주체라면 이게 될까?"를 <em>내 권한으로</em> 물어보는 것이다. 그래서 <code>--as</code> 로 뭔가를 검사하려면 정작 <b>나</b>에게 impersonate 권한이 있어야 한다(kind 의 기본 관리자 계정은 있다). 실제 로그인이 아니라 디버깅용 렌즈다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>system:serviceaccount:lab:reader</code> — 이 긴 이름을 매번 외워야 하나요?</summary>
+<div class="a"><p>형식만 기억하면 된다: <code>system:serviceaccount:&lt;namespace&gt;:&lt;name&gt;</code>. 앞의 <code>system:</code> 접두어는 "이건 사람이 아니라 시스템 신원"이라는 표식이다. 참고로 그룹 형태 <code>system:serviceaccounts:lab</code>(복수형!) 은 "lab 의 모든 SA"를 뜻한다 — 나중에 namespace 단위로 권한 줄 때 쓴다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Role 이랑 ClusterRole, 뭘 언제 쓰는지 계속 헷갈려요.</summary>
+<div class="a"><p>딱 한 가지 질문으로 가른다: <b>"이 권한이 한 namespace 안에서만 필요한가?"</b> 예 → Role. 아니오(전 namespace, 또는 node·PV 처럼 애초에 namespace 가 없는 리소스) → ClusterRole. 오늘 추적 3 의 두 번째 <code>no</code> 가 바로 Role 의 namespace 벽에 부딪힌 것이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>RoleBinding 이 ClusterRole 을 가리켜도 되나요?</summary>
+<div class="a"><p>된다 — 그리고 이게 아주 유용한 패턴이다. ClusterRole 로 "pods 읽기" 규칙을 <em>한 번</em> 정의해 두고, 각 namespace 의 RoleBinding 이 그걸 참조하면 "이 namespace 안에서만"으로 효력이 좁혀진다. 규칙 재사용 + 범위 제한을 동시에. 반대로 ClusterRoleBinding 으로 이으면 전 namespace 로 열린다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>apiGroups: [""]</code> 의 빈 문자열은 뭐예요?</summary>
+<div class="a"><p>가장 오래된 <b>core API 그룹</b>을 뜻한다 — pods, services, configmaps, secrets, nodes 등이 여기 산다(그래서 이름이 없어 <code>""</code>). 반면 Deployment 는 <code>apps</code> 그룹, RBAC 리소스는 <code>rbac.authorization.k8s.io</code> 그룹이다. 어느 그룹인지 모르겠으면 <code>kubectl api-resources</code> 의 APIVERSION 열을 보면 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>이 <code>reader</code> SA 를 실제 Pod 에 어떻게 붙이나요?</summary>
+<div class="a"><p>Pod spec 에 <code>serviceAccountName: reader</code> 한 줄. 그러면 그 Pod 안 프로세스는 이 SA 의 토큰으로 API server 를 부르고, 딱 <code>pods 읽기</code>만 할 수 있다. 지정 안 하면 그 namespace 의 <code>default</code> SA 를 받는다 — 오늘은 <code>--as</code> 로 흉내만 냈지만, 진짜 앱에 권한을 매는 건 이 필드다.</p></div>
+</details>
+
+<details class="faq">
+<summary>그럼 내(사람) 계정 권한은 어디서 정해지나요?</summary>
+<div class="a"><p>사람은 SA 가 아니라 <b>kubeconfig</b> 의 인증서/토큰으로 인증하고, 그 신원에 붙은 (Cluster)RoleBinding 으로 권한이 정해진다. kind 로 만든 클러스터의 기본 사용자는 <code>cluster-admin</code>(전권)이라 지금까지 아무 제약 없이 됐던 것이다. 이 "전권으로 시작"이 편하지만 위험한 이유는 KCSA/CKS 에서 정면으로 다룬다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>auth can-i</code> 말고 진짜로 시험해 볼 수는 없나요?</summary>
+<div class="a"><p>있다. <code>kubectl get pods --as=system:serviceaccount:lab:reader -n lab</code> 처럼 <code>--as</code> 를 실제 명령에 붙이면 그 SA 권한으로 진짜 실행된다 — 허용이면 목록이 나오고, 아니면 <code>Forbidden</code> 에러가 뜬다. <code>auth can-i</code> 는 그 결과를 <em>부작용 없이 yes/no 로만</em> 미리 보는 안전한 버전이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Role 을 지웠는데 RoleBinding 이 남아 있으면 어떻게 되나요?</summary>
+<div class="a"><p>Binding 은 존재하지만 가리킬 Role 이 없으니 권한은 <b>안 생긴다</b>(<code>auth can-i</code> → no). 쿠버네티스는 이걸 에러로 막지 않는다 — "없는 Role 을 가리키는 Binding"도 그냥 조용히 무력할 뿐이다. 그래서 "Binding 도 있고 Role 도 있는데 안 된다"면 <code>roleRef</code> 의 이름 오타를 의심한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>verbs 에는 뭘 넣을 수 있어요?</summary>
+<div class="a"><p>주로 <code>get, list, watch</code>(읽기 3종), <code>create, update, patch, delete</code>(쓰기), 그리고 <code>*</code>(전부). 흔한 함정: <code>kubectl get</code> 한 번이 실제로는 <code>list</code> 를 쓰고, <code>-w</code> 는 <code>watch</code> 가 필요하다. "읽기 권한 줬는데 목록이 안 나와요"의 원인이 대개 <code>list</code> 누락이다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/reference/access-authn-authz/rbac/">공식 문서: Using RBAC Authorization</a> —
+Role/ClusterRole/RoleBinding 예제의 원전. <code>kubectl auth can-i</code> 는
+<a href="https://kubernetes.io/docs/reference/access-authn-authz/authorization/#checking-api-access">Authorization Overview</a> 참조.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "Pod 에 이 SA 를 실제로 붙이려면?(<code>serviceAccountName</code>)",
+"aggregated ClusterRole 이 뭐지?", "<code>--as-group</code> 은 언제 쓰나?" — 전부 CKA/CKS 로 이어지는 좋은 실.
+</div>
+
+<nav class="nav">
+  <a href="0007-architecture-rbac-verification.html">← 0007 검증 퀴즈</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

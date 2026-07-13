@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0003 — Service 는 Pod 를 어떻게 찾아내나</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0003 <span class="tag">Level 1 · 실습</span></p>
+<h1>Service 는 Pod 를 어떻게 찾아내나</h1>
+<p class="subtitle">Pod 는 계속 죽고 태어난다. 그런데 주소는 왜 안 바뀌는가 — label selector 와 EndpointSlice 의 이야기.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> Service 가 label 로 Pod 집합을 추적하는 과정을
+EndpointSlice 에서 직접 관찰하고, "Pod 가 바뀌어도 주소가 안정적인 이유"를 체인으로 설명할 수 있다.
+</div>
+
+<h2>1. 문제: 움직이는 과녁</h2>
+
+<p>레슨 0002 실습에서 Pod 를 지울 때마다 <b>새 이름, 새 IP</b> 로 태어나는 걸 봤다.
+클라이언트가 Pod IP 를 직접 알고 있다면 매번 끊긴다. 그래서 쿠버네티스는 중간에 한 층을 더 둔다:</p>
+
+<div class="diagram">
+  <span class="box"><span class="t">클라이언트 Pod</span><span class="d">"web 에 연결해줘"</span></span>
+  <span class="arrow">→</span>
+  <span class="box cp"><span class="t">Service <code>web</code></span><span class="d">고정 ClusterIP + DNS 이름</span></span>
+  <span class="arrow">→ selector: app=web →</span>
+  <span class="box wk"><span class="t">EndpointSlice</span><span class="d">지금 살아있는 Pod IP 목록</span></span>
+</div>
+
+<p>Service 는 Pod 를 <em>소유하지 않는다</em> — 레슨 0002 의 소유 체인과 완전히 별개다.
+그저 <b>label selector</b> 로 "지금 <code>app=web</code> 라벨을 단 Ready 상태 Pod 전부"를 계속 조회할 뿐이다.
+그 결과 목록이 <b>EndpointSlice</b> 라는 리소스에 실시간으로 기록된다.</p>
+
+<div class="aha">
+<span class="label">아하</span>
+여기서도 제어 루프다. EndpointSlice 컨트롤러가 "selector 에 걸리는 Pod 목록"과
+"EndpointSlice 내용"의 차이를 끊임없이 좁힌다. Deployment 가 Pod 를 갈아치워도
+루프가 목록을 갱신하니, 클라이언트가 보는 주소(ClusterIP/DNS)는 흔들리지 않는다.
+</div>
+
+<h2>2. 실습 — 과녁 추적을 눈으로 본다</h2>
+
+<div class="note">
+레슨 0002 의 kind 클러스터(<code>mastery</code>)와 <code>web</code> Deployment 를 그대로 쓴다.
+지웠다면: <code>kind create cluster --name mastery && kubectl create deployment web --image=nginx:1.27 --replicas=3</code>
+</div>
+
+<p><b>추적 1 — Service 를 붙이고 세 조각 확인:</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl expose deployment web --port=80</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get svc web -o wide && kubectl get endpointslices -l kubernetes.io/service-name=web</span>
+<span class="out">NAME   TYPE        CLUSTER-IP     PORT(S)   SELECTOR
+web    ClusterIP   10.96.<span class="hl">143.7</span>    80/TCP    <span class="hl">app=web</span>
+
+NAME        ADDRESSTYPE   PORTS   ENDPOINTS
+web-x8k2p   IPv4          80      10.244.0.5,10.244.0.6,10.244.0.7</span>
+</div>
+
+<p>ENDPOINTS 의 세 IP 를 Pod IP 와 대조해 보라: <code>kubectl get pod -l app=web -o wide</code> — 정확히 일치한다.</p>
+
+<p><b>추적 2 — 다른 Pod 에서 이름으로 접속:</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl run client --rm -it --image=busybox:1.36 --restart=Never -- wget -qO- http://web</span>
+<span class="out">&lt;title&gt;Welcome to nginx!&lt;/title&gt; ...</span>
+</div>
+
+<p>Pod IP 를 하나도 몰랐는데 연결됐다. 클러스터 DNS 가 <code>web</code> →
+<code>web.default.svc.cluster.local</code> → ClusterIP 로 풀어준 것.</p>
+
+<p><b>추적 3 — Pod 를 갈아치워도 목록이 따라온다:</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl delete pod -l app=web --wait=false && kubectl get endpointslices -l kubernetes.io/service-name=web -w</span>
+<span class="out">... 옛 IP 들이 빠지고, ReplicaSet 이 만든 새 Pod 의 IP 들로 갱신된다 (Ctrl-C 로 종료)</span>
+</div>
+
+<p>ClusterIP(<code>kubectl get svc web</code>)는 그대로다. <b>주소는 고정, 과녁 목록만 갱신</b> — 이게 Service 의 전부다.</p>
+
+<div class="warn">
+selector 를 오타 내면(예: <code>app=Web</code>) Service 는 만들어지지만 EndpointSlice 가 <b>빈다</b> —
+연결이 안 될 때 "Service 는 있는데 endpoints 가 비어 있나?"는 실기 시험 단골 디버깅 절차다.
+<code>kubectl describe svc web</code> 의 Endpoints 줄을 확인하는 습관을 들이자.
+</div>
+
+<h2>3. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. Service 와 Pod 를 잇는 메커니즘은?</p>
+  <div class="opts">
+    <button class="opt">Service 가 ReplicaSet 의 ownerReferences 를 따라 Pod 를 찾는다</button>
+    <button class="opt" data-correct="true">label selector 에 걸리는 Pod 의 IP 가 EndpointSlice 에 기록된다</button>
+    <button class="opt">Deployment 가 생성 시 Service 에 Pod IP 목록을 등록해 준다</button>
+  </div>
+  <div class="explain">Service 는 소유 체인 밖에 있다. 오직 라벨로만 느슨하게 연결되며, 그래서 Deployment 가 아닌 어떤 Pod 든(라벨만 맞으면) 과녁이 될 수 있다. <a href="https://kubernetes.io/docs/concepts/services-networking/service/">공식 문서: Service</a></div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. 추적 3 에서 Pod 삭제 후, 클라이언트 연결이 유지되는 이유는?</p>
+  <div class="opts">
+    <button class="opt">삭제된 Pod 의 IP 를 새 Pod 가 물려받도록 kubelet 이 재할당해서</button>
+    <button class="opt">Service 가 Pod 를 소유하고 있어 삭제를 감지하고 되살려서</button>
+    <button class="opt" data-correct="true">ClusterIP 는 고정이고 EndpointSlice 목록만 새 Pod IP 로 갱신돼서</button>
+  </div>
+  <div class="explain">역할 분담: Pod 를 되살리는 건 ReplicaSet(레슨 0002), 과녁 목록을 갱신하는 건 EndpointSlice 컨트롤러, 고정 주소를 제공하는 건 Service. 세 루프가 각자 돈다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0002 복습) <code>kubectl rollout undo</code> 가 롤백하는 방식은?</p>
+  <div class="opts">
+    <button class="opt">Deployment 의 이전 매니페스트 파일을 etcd 스냅샷에서 복원한다</button>
+    <button class="opt" data-correct="true">0 으로 줄여두었던 옛 ReplicaSet 을 다시 원하는 개수로 키운다</button>
+    <button class="opt">새 ReplicaSet 의 Pod 템플릿을 이전 이미지 버전으로 수정한다</button>
+  </div>
+  <div class="explain">간격 반복: 레슨 0002 의 warning 박스. 옛 ReplicaSet 이 0 으로 남아 있는 이유가 바로 이것이다. 템플릿은 불변 — 고치지 않고 교체/재사용한다.</div>
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">실습하다 떠오르는 "어? 이건 왜 이러지?"를 미리 모았다. 궁금한 것만 펼쳐 보면 된다 — 안 궁금하면 접힌 채 넘어가도 된다.</p>
+
+<details class="faq">
+<summary>ClusterIP 는 왜 안 바뀌나요? Pod 는 계속 바뀌는데요.</summary>
+<div class="a"><p>ClusterIP 는 Service 를 만들 때 <em>한 번</em> 할당되고, Service 를 지우기 전까지 고정이다. Pod 는 죽고 태어나며 IP 가 바뀌지만, 그건 EndpointSlice 안의 <b>과녁 목록</b>일 뿐 클라이언트가 보는 주소가 아니다. "주소는 고정, 과녁 목록만 갱신" — 이 한 줄이 Service 의 전부다.</p></div>
+</details>
+
+<details class="faq">
+<summary>selector 에 오타를 내면 어떻게 되나요?</summary>
+<div class="a"><p>Service 는 <b>정상적으로 만들어진다</b> — 다만 selector 에 걸리는 Pod 가 없어서 EndpointSlice 가 빈다. 연결하면 아무 곳에도 안 닿아 timeout 이 난다. <code>kubectl describe svc web</code> 의 Endpoints 줄이 비어 있으면 selector 를 의심하라 — 실기 시험 단골 디버깅이다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>http://web</code> 이름은 누가 풀어주나요?</summary>
+<div class="a"><p>클러스터 안에 상주하는 <b>CoreDNS</b> 다. Service 를 만들면 자동으로 <code>web.default.svc.cluster.local</code> DNS 레코드가 생기고, Pod 안에서 <code>web</code> 만 쳐도 same-namespace 규칙으로 그 이름까지 확장돼 ClusterIP 로 풀린다. IP 를 하나도 몰라도 이름만으로 닿는 이유다.</p></div>
+</details>
+
+<details class="faq">
+<summary>EndpointSlice 랑 Endpoints 는 뭐가 달라요?</summary>
+<div class="a"><p>둘 다 "지금 살아있는 Pod IP 목록"을 담지만, 옛 <code>Endpoints</code> 는 한 리소스에 전부 몰아넣어 Pod 가 수천 개면 무거웠다. <b>EndpointSlice</b> 는 이를 여러 조각(기본 100개씩)으로 나눠 확장성을 얻은 신형이다. 요즘 컨트롤러는 EndpointSlice 를 쓰고, <code>Endpoints</code> 는 호환용으로만 남아 있다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Service 도 Pod 처럼 죽나요?</summary>
+<div class="a"><p>아니다. Service 는 노드 위에서 도는 프로세스가 아니라 API server 에 등록된 <b>가상의 라우팅 규칙</b>이다. 실제 트래픽은 각 노드의 <code>kube-proxy</code>(또는 그 후속 데이터플레인)가 iptables/IPVS 규칙으로 ClusterIP 를 Pod IP 로 넘겨준다. 그래서 특정 Pod 가 죽어도 Service 자체는 멀쩡하다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>kubectl expose</code> 없이 YAML 로도 만들 수 있나요?</summary>
+<div class="a"><p>물론이다. <code>expose</code> 는 그냥 Service YAML 을 대신 써주는 편의 명령이다. 직접 쓰려면 <code>kind: Service</code> 에 <code>spec.selector: {app: web}</code> 와 <code>spec.ports</code> 를 적으면 된다. 실전 매니페스트는 대부분 YAML 이니, <code>kubectl expose ... --dry-run=client -o yaml</code> 로 뽑아 보며 익혀 두면 좋다.</p></div>
+</details>
+
+<details class="faq">
+<summary>selector 없는 Service 도 있다던데요?</summary>
+<div class="a"><p>있다. selector 를 비우면 EndpointSlice 를 <b>손으로</b> 채워야 한다 — 클러스터 밖 데이터베이스처럼 Pod 가 아닌 외부 IP 로 트래픽을 보내고 싶을 때 쓰는 고급 패턴이다. 지금은 "보통은 selector 로 자동, 예외적으로 수동도 가능"만 알아 두면 충분하다.</p></div>
+</details>
+
+<details class="faq">
+<summary>포트를 80 으로 열었는데 Pod 는 8080 이면요?</summary>
+<div class="a"><p><code>port</code>(Service 가 받는 포트)와 <code>targetPort</code>(Pod 안 컨테이너 포트)를 따로 지정한다: <code>--port=80 --target-port=8080</code>. 안 적으면 <code>targetPort</code> 는 <code>port</code> 와 같다고 가정한다 — "연결은 되는데 응답이 없다"의 흔한 원인이 이 둘의 불일치다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Service 를 다른 namespace 에서도 이름으로 부를 수 있나요?</summary>
+<div class="a"><p>같은 namespace 면 <code>web</code>, 다른 namespace 면 <code>web.&lt;namespace&gt;</code> 형태로 불러야 한다. 짧은 이름 <code>web</code> 은 "내 namespace 안"으로만 풀리기 때문이다. 전체 이름 <code>web.default.svc.cluster.local</code> 은 어디서든 통한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Ready 가 아닌 Pod 도 과녁에 들어가나요?</summary>
+<div class="a"><p>아니다. readinessProbe 가 통과해 <b>Ready</b> 상태인 Pod 만 EndpointSlice 에 실린다. 그래서 아직 부팅 중인 Pod 로는 트래픽이 안 간다 — 이게 무중단 배포의 핵심 장치다. "Pod 는 Running 인데 왜 트래픽이 안 와요?"의 답이 대개 readiness 미통과다.</p></div>
+</details>
+
+<details class="faq">
+<summary>replicas 를 0 으로 줄이면 Service 는 어떻게 되나요?</summary>
+<div class="a"><p>Service 와 ClusterIP 는 그대로 남지만 EndpointSlice 가 <b>빈다</b>(과녁이 하나도 없으니). 연결하면 닿을 곳이 없어 실패한다. 다시 replicas 를 올리면 새 Pod IP 로 목록이 자동으로 채워진다 — Service 는 손댈 필요가 없다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/services-networking/service/">Kubernetes 공식 문서: Service</a> —
+"Defining a Service" 와 "Endpoints/EndpointSlices" 절까지. NodePort/LoadBalancer 는 다음 기회에 — 오늘은 ClusterIP 하나만 단단히.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> DNS 가 안 풀리거나, EndpointSlice 가 비어 있거나,
+"Endpoints 리소스와 EndpointSlice 는 뭐가 다르지?" 같은 의문 — 전부 채팅으로.
+</div>
+
+<nav class="nav">
+  <a href="0002-deployment-ownership-chain.html">← 0002 소유 체인</a>
+  <a href="../reference/roadmap.html">성장 로드맵</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

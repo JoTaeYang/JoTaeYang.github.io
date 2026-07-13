@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 6 — 양자화 (FP16 → FP8 → FP4)</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .fmt { width:100%; border-collapse:collapse; font-size:0.9rem; margin:1.1rem 0; }
+  .fmt th, .fmt td { padding:0.45rem 0.6rem; border-bottom:1px solid var(--rule); text-align:left; }
+  .fmt th { font-family:system-ui,sans-serif; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); }
+  .bits { font-family:"SF Mono",Menlo,monospace; font-size:0.78rem; }
+  .s { background:#fde68a; padding:0.05rem 0.3rem; border-radius:3px; }
+  .e { background:#bfdbfe; padding:0.05rem 0.3rem; border-radius:3px; }
+  .m { background:#bbf7d0; padding:0.05rem 0.3rem; border-radius:3px; }
+</style>
+</head>
+<body>
+
+<p class="kicker">Lesson 06 · Phase 2 — The Knobs</p>
+<h1>양자화: 숫자 하나에 몇 비트를 쓸 것인가</h1>
+<p class="subtitle">가중치를 FP16(2바이트)에서 FP8(1바이트)·FP4(0.5바이트)로 줄인다. Lesson 1 공식의 분자를 직접 깎는, 서빙 최적화의 가장 강력한 단일 레버.</p>
+
+<div class="callout key">
+  <span class="label">이번 레슨의 단 하나의 승리</span>
+  양자화가 왜 <strong>메모리와 계산을 동시에</strong>(double win) 빠르게 하는지 Lesson 1 공식으로 계산하고,
+  그 대가인 <strong>정확도 손실</strong>이라는 긴장을 이해한다. 그리고 Sionic 글의 FP8/FP4가 왜 등장하는지 본다.
+</div>
+
+<h2>왜 이게 가장 강력한 레버인가 — Lesson 1 공식으로</h2>
+<p>지난 Phase의 핵심 공식을 다시 꺼내자:</p>
+<div class="callout"><span class="label">Lesson 1</span>
+  토큰당 시간 ≈ <span class="mono">(읽는 가중치 바이트) ÷ (메모리 대역폭)</span>.
+  그리고 <span class="mono">가중치 바이트 = 파라미터 수 × (파라미터당 바이트)</span>.
+</div>
+<p>
+대역폭은 GPU가 정하니 못 바꾼다. 파라미터 수는 모델이 정한다. 그런데 <strong>“파라미터당 바이트”는 우리가 바꿀 수 있다.</strong>
+이게 양자화다 — 숫자 하나를 <strong>더 적은 비트</strong>로 저장하는 것.
+</p>
+
+<table class="fmt">
+  <tr><th>포맷</th><th>비트</th><th>파라미터당 바이트</th><th>70B 모델 크기</th></tr>
+  <tr><td>FP16 / BF16 (기준)</td><td>16</td><td>2.0 B</td><td>140 GB</td></tr>
+  <tr><td>FP8 (E4M3)</td><td>8</td><td>1.0 B</td><td>70 GB</td></tr>
+  <tr><td>FP4 / INT4</td><td>4</td><td>0.5 B</td><td>35 GB</td></tr>
+</table>
+
+<div class="calc">
+  <table>
+    <tr><td>FP16 70B, 토큰당 읽기 (140GB ÷ 8TB/s)</td><td>17.5 ms → ≈ 57 tok/s</td></tr>
+    <tr><td>FP8 로 양자화 (70GB)</td><td>8.75 ms → ≈ 114 tok/s</td></tr>
+    <tr class="result"><td>FP4 로 양자화 (35GB)</td><td>4.4 ms → <strong>≈ 228 tok/s</strong></td></tr>
+  </table>
+</div>
+<p>비트를 절반으로 줄일 때마다 <strong>대역폭으로 인한 토큰당 시간이 절반</strong>이 된다. 공짜에 가까운 2배다.</p>
+
+<h2>사실은 두 번 이긴다 (double win)</h2>
+<table style="width:100%; border-collapse:collapse; margin:1rem 0; font-size:0.95rem;">
+  <tr style="border-bottom:1px solid var(--rule);"><td style="padding:0.5rem; width:130px;"><strong>① 메모리 축</strong></td><td style="padding:0.5rem;">가중치 바이트 ↓ → 토큰당 시간 ↓ (위 계산). <strong>KV 캐시</strong>도 FP8로 저장하면 절반 → 배치 상한 ↑ (L4). 모델도 더 큰 걸 올릴 여력.</td></tr>
+  <tr><td style="padding:0.5rem;"><strong>② 계산 축</strong></td><td style="padding:0.5rem;">GPU <a href="../reference/glossary.html">텐서 코어</a>는 저정밀 행렬곱을 <strong>물리적으로 더 빠르게</strong> 처리한다. FP8은 FP16의 약 2배 처리량, FP4는 그보다 더<sup class="cite">[1]</sup>.</td></tr>
+</table>
+<div class="callout key">
+  <span class="label">Lesson 1의 15 PFLOPS 정체</span>
+  Lesson 1에서 B300의 연산 능력을 “15 PFLOPS <strong>FP4</strong>”라고 썼던 걸 기억하나? 그 어마어마한 숫자는
+  <em>FP4로 계산할 때만</em> 나온다. 즉 하드웨어 설계 자체가 “양자화해서 써라”라고 말하고 있다.
+  Blackwell이 FP4를 네이티브로 미는 이유다.
+</div>
+
+<h2>그럼 양자화란 정확히 무엇인가</h2>
+<p>
+연속적인 실수 범위를, <strong>몇 개 안 되는 대표값(level)</strong>에 반올림해 매핑하는 것이다.
+비트가 적을수록 표현 가능한 level 수가 적고(FP8 ≈ 256개, FP4 ≈ 16개), 그만큼 <strong>반올림 오차</strong>가 커진다.
+실제 가중치 범위를 level에 맞추려면 <strong>스케일 값(scale factor)</strong>을 곱해 쓰는데, 이 스케일을
+텐서 전체/채널별/블록별 중 어디 단위로 두느냐가 품질을 크게 좌우한다.
+</p>
+<p class="small">부동소수점은 <span class="bits"><span class="s">부호</span>·<span class="e">지수</span>·<span class="m">가수</span></span>로 나뉜다.
+FP8은 두 종류: <strong>E4M3</strong>(<span class="e">지수4</span><span class="m">가수3</span>, 정밀도 우선, ±448)와
+<strong>E5M2</strong>(<span class="e">지수5</span><span class="m">가수2</span>, 범위 우선). 정밀도(가수)와 범위(지수)를 맞바꾸는 설계다<sup class="cite">[2]</sup>.</p>
+
+<h2>대가: 정확도 손실 (핵심 긴장)</h2>
+<p>
+공짜 점심은 없다. level이 적어질수록 모델 출력이 원본에서 미묘하게 어긋난다. 경험칙<sup class="cite">[3]</sup>:
+</p>
+<ul>
+  <li><strong>FP8</strong>: 품질 손실이 거의 없다시피 — Hopper/Blackwell이 있으면 사실상 기본값.</li>
+  <li><strong>FP4 / INT4</strong>: 더 공격적. <strong>수학·코드·추론</strong>처럼 정밀함이 중요한 작업에서 품질 저하가 두드러짐. 가중치만(weight-only) 줄이고 활성값은 높게 두는 식으로 완화.</li>
+</ul>
+
+<div class="callout">
+  <span class="label">Sionic 글과의 연결 — 그리고 다음 레슨의 떡밥</span>
+  Sionic은 FP8/FP4를 적극 쓰되(“LMHead FP8”, Blackwell FP4), 글에서 결정적 통찰을 남긴다:
+  <em>“양자화의 미묘한 정확도 저하가 <strong>MTP의 평균 예측 길이를 떨어뜨려</strong> 오히려 처리량을 낮출 수 있다.”</em>
+  즉 양자화는 독립적인 스위치가 아니라 <strong>다른 최적화(MTP)와 수치적으로 얽혀</strong> 있다.
+  이 MTP가 바로 <strong>다음 레슨</strong>의 주제다.
+</div>
+
+<div class="quiz" data-answer="2">
+  <div class="q">양자화가 추론을 빠르게 하는 이유로 가장 정확한 것은?</div>
+  <button class="opt">파라미터 개수 자체를 줄여 계산량을 없애서</button>
+  <button class="opt">메모리 대역폭 자체를 물리적으로 늘려서</button>
+  <button class="opt">파라미터당 바이트를 줄여 읽는 양이 줄고, 텐서 코어가 저정밀을 더 빨리 계산해서</button>
+  <button class="opt">KV 캐시를 아예 만들지 않아도 되게 해서</button>
+  <div class="feedback"
+       data-correct="정확하다. 파라미터 '수'가 아니라 '바이트/파라미터'를 줄인다 → 메모리(읽는 양 ↓) + 계산(텐서 코어 저정밀 ↑) 두 축 모두 이득."
+       data-wrong="파라미터 수는 그대로다. 줄이는 건 '파라미터당 바이트'이고, 그게 메모리와 계산 두 축을 동시에 개선한다."></div>
+</div>
+
+<div class="callout">
+  <span class="label">스스로 확인 (retrieval practice)</span>
+  종이를 덮고: ⑴ 양자화가 줄이는 건 파라미터 '수'인가 '파라미터당 바이트'인가? ⑵ double win의 두 축은?
+  ⑶ FP4가 특히 위험한 작업 종류는? &nbsp;+ <em>복습:</em> 토큰당 시간 ≈ ___ ÷ ___ ?(L1)
+</div>
+
+<h2>가장 먼저 읽을 자료 (primary source)</h2>
+<p>
+BentoML, <a href="https://bentoml.com/llm/model-preparation/llm-quantization"><em>LLM Quantization</em></a> — 포맷·방법을 실무 관점에서 정리.
+포맷 감각은 <a href="https://rcrtech.com/semiconductor-news/llms-quantization-fp8-fp4-int8/"><em>FP8, FP4, and INT8 explained</em></a>.
+</p>
+
+<div class="ask">
+  🧑‍🏫 <strong>막히면 바로 물어보세요.</strong> “GPTQ랑 AWQ가 뭐가 달라?”, “스케일을 블록 단위로 두면 왜 좋아?”,
+  “활성값(activation) 양자화는 왜 더 까다로워?”, “weight-only가 정확히 무슨 뜻이야?”
+</div>
+
+<hr>
+<p class="refs"><strong>References</strong></p>
+<ol class="refs">
+  <li>[1] Gingerlabs, <a href="https://www.gingerlabs.ai/blog/llm-quantization-int4-int8-fp16">LLM Quantization: INT4 vs INT8 vs FP16</a>. (FP8/FP4 처리량 배수)</li>
+  <li>[2] RCR Tech, <a href="https://rcrtech.com/semiconductor-news/llms-quantization-fp8-fp4-int8/">LLMs and quantization: FP8, FP4, INT8 explained</a>. (E4M3/E5M2)</li>
+  <li>[3] BentoML, <a href="https://bentoml.com/llm/model-preparation/llm-quantization">LLM Quantization</a>. (정확도 경험칙)</li>
+  <li>[4] Sionic AI, <a href="https://blog.sionic.ai/glm-5-2-x10">GLM-5.2 x10</a>. (양자화↔MTP 얽힘)</li>
+</ol>
+
+<div class="lesson-nav">
+  <span><a href="0005-chunked-prefill-scheduling.html">← Lesson 5</a></span>
+  <span><a href="../index.html">🏠 Hub</a> · <a href="../reference/glossary.html">Glossary</a> · Next: MTP / Speculative decoding (예정)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

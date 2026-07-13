@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kubernetes Mastery — 레슨 목차</title>
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Level 1 (KCNA)</p>
+<h1>레슨 목차</h1>
+<p class="subtitle">진단에서 시작해 KCNA 전 도메인까지. 각 레슨은 짧고, 하나의 손에 잡히는 win 을 남긴다. 위에서부터 순서대로 보면 된다.</p>
+
+<div class="note">
+<b>지도:</b> <a href="reference/kcna-gap-check.html">KCNA 갭 체크</a> (도메인별 커버 현황) ·
+<a href="reference/roadmap.html">성장 로드맵</a> (5-cert Kubestronaut 경로).
+실습 클러스터: kind <code>mastery</code> + namespace <code>lab</code>.
+</div>
+
+<h2>진단</h2>
+<table class="cmp">
+<tr><th>#</th><th>레슨</th></tr>
+<tr><td>0001</td><td><a href="lessons/0001-placement-diagnostic.html"><b>수준 진단: 어디서 시작할까</b></a><br>정답보다 <em>어디서 막히는지</em>가 산출물. 8문항.</td></tr>
+</table>
+
+<h2>Fundamentals — 핵심 리소스 (비중 ~46%)</h2>
+<table class="cmp">
+<tr><th>#</th><th>레슨</th></tr>
+<tr><td>0002</td><td><a href="lessons/0002-deployment-ownership-chain.html"><b>Deployment 는 Pod 를 만들지 않는다</b></a><br>소유 체인 Deployment→ReplicaSet→Pod 를 눈으로 확인.</td></tr>
+<tr><td>0003</td><td><a href="lessons/0003-service-and-endpoints.html"><b>Service 는 Pod 를 어떻게 찾아내나</b></a><br>label selector 와 EndpointSlice — 주소가 안 바뀌는 이유.</td></tr>
+<tr><td>0004</td><td><a href="lessons/0004-probes.html"><b>readiness 는 과녁에서 빼고, liveness 는 재시작한다</b></a><br>두 probe 의 차이를 EndpointSlice·RESTARTS 로 확인.</td></tr>
+<tr><td>0005</td><td><a href="lessons/0005-configmap-and-secret.html"><b>설정은 이미지 밖으로: ConfigMap 과 Secret</b></a><br>env 주입 vs volume 주입의 결정적 차이.</td></tr>
+<tr><td>0006</td><td><a href="lessons/0006-requests-limits-scheduling.html"><b>requests 는 예약, limits 는 단속</b></a><br>Pending 의 원인과 OOMKilled 의 정체.</td></tr>
+<tr><td>0008</td><td><a href="lessons/0008-rbac-hands-on.html"><b>RBAC: 거부를 부여로 뒤집기</b></a><br><code>auth can-i</code> 거부→부여→경계를 손으로.</td></tr>
+<tr><td>0009</td><td><a href="lessons/0009-workload-family.html"><b>워크로드 4형제: 언제 Deployment 가 아닌가</b></a><br>StatefulSet·DaemonSet·Job·CronJob — 가정이 깨지는 지점.</td></tr>
+<tr><td>0010</td><td><a href="lessons/0010-external-exposure.html"><b>외부 노출 3단</b></a><br>NodePort → LoadBalancer → Ingress, ClusterIP 위에 3단.</td></tr>
+<tr><td>0011</td><td><a href="lessons/0011-storage-pv-pvc.html"><b>스토리지: 요청(PVC), 공급(PV), 공장(StorageClass)</b></a><br>동적 프로비저닝 + Pod 죽어도 파일 유지.</td></tr>
+</table>
+
+<h2>아키텍처 검증</h2>
+<table class="cmp">
+<tr><th>#</th><th>레슨</th></tr>
+<tr><td>0007</td><td><a href="lessons/0007-architecture-rbac-verification.html"><b>검증: 아키텍처와 RBAC, 아직 단단한가</b></a><br>인접 트랙 지식이 KCNA 기준으로 살아 있는지 8문항.</td></tr>
+</table>
+
+<h2>Container Orchestration & 네트워크 심화 (비중 ~22%)</h2>
+<table class="cmp">
+<tr><th>#</th><th>레슨</th></tr>
+<tr><td>0012</td><td><a href="lessons/0012-interfaces-cri-cni-csi.html"><b>인터페이스 3형제: CRI · CNI · CSI</b></a><br>표준 소켓 3개 — 손으로 만진 것들의 밑단에 이름 붙이기.</td></tr>
+<tr><td>0013</td><td><a href="lessons/0013-pod-vs-service-network.html"><b>Pod 네트워크 vs Service 네트워크: 진짜와 가상</b></a> <span class="tag">심화</span><br>가상 IP·DNAT·CIDR·요청의 여정. 질문에서 태어난 레슨.</td></tr>
+</table>
+
+<h2>어휘 & 마무리</h2>
+<table class="cmp">
+<tr><th>#</th><th>레슨</th></tr>
+<tr><td>0014</td><td><a href="lessons/0014-cloud-native-vocabulary.html"><b>클라우드 네이티브 어휘 일괄</b></a><br>CNCF 성숙도 · 12-factor · 관측성 3기둥 · GitOps · Helm (저비중 3도메인).</td></tr>
+<tr><td>0015</td><td><a href="lessons/0015-kcna-mock-diagnostic.html"><b>KCNA 전 도메인 모의 진단</b></a> <span class="tag">모의 진단</span><br>18문항, 다섯 도메인 비중대로. 약한 칸 확인 → 응시 일정 확정.</td></tr>
+</table>
+
+<h2>심화 보완 — 사각지대 메우기</h2>
+<p class="note">모의 진단 후 식별한 KCNA 커리큘럼의 얇은 칸들. 어휘 수준을 넘어 딥하게, 가능한 건 실습까지.</p>
+<table class="cmp">
+<tr><th>#</th><th>레슨</th></tr>
+<tr><td>0016</td><td><a href="lessons/0016-service-mesh.html"><b>서비스 메시</b></a> <span class="tag">심화</span><br>사이드카·data/control plane·자동 mTLS·L7 트래픽 관리 (Istio/Linkerd).</td></tr>
+<tr><td>0017</td><td><a href="lessons/0017-serverless-knative.html"><b>서버리스 & Knative</b></a> <span class="tag">심화</span><br>scale-to-zero·이벤트 구동·cold start, HPA와의 결정적 대비.</td></tr>
+<tr><td>0018</td><td><a href="lessons/0018-cncf-community-governance.html"><b>CNCF 커뮤니티·거버넌스</b></a> <span class="tag">심화</span><br>Governing Board vs TOC·오픈 거버넌스·페르소나·역할.</td></tr>
+<tr><td>0019</td><td><a href="lessons/0019-cost-management-finops.html"><b>비용 관리 & FinOps</b></a> <span class="tag">심화</span><br>requests=비용 레버(0006)·OpenCost·showback/chargeback.</td></tr>
+<tr><td>0020</td><td><a href="lessons/0020-qos-classes-eviction.html"><b>QoS 클래스 & eviction</b></a> <span class="tag">실습</span><br>Guaranteed/Burstable/BestEffort·축출 순서, OOMKill과 구분.</td></tr>
+<tr><td>0021</td><td><a href="lessons/0021-operators-crd.html"><b>Operator 패턴 & CRD</b></a> <span class="tag">실습</span><br>API 확장·커스텀 컨트롤러=제어 루프(0007)·day-1 vs day-2.</td></tr>
+<tr><td>0022</td><td><a href="lessons/0022-resourcequota-limitrange-namespace.html"><b>ResourceQuota·LimitRange·Namespace</b></a> <span class="tag">실습</span><br>namespace 단위 예산·기본값 주입, namespace≠네트워크 격리.</td></tr>
+</table>
+
+<h2>기초 메커니즘 딥다이브 — 이미 배운 것의 진짜 엔진</h2>
+<p class="note">여러 레슨에 조각으로 흩어져 있던 밑바닥 메커니즘을 한 장씩으로. 시험 밖이 아니라 <b>이해의 밑돌</b> — CKAD/CKA 로 이자가 붙는다.</p>
+<table class="cmp">
+<tr><th>#</th><th>레슨</th></tr>
+<tr><td>0023</td><td><a href="lessons/0023-pod-lifecycle-states.html"><b>Pod 생명주기 상태 머신</b></a> <span class="tag">심화</span><br>Pod phase vs 컨테이너 상태 vs restartPolicy — 0004·0006·0009 의 파편을 한 장으로.</td></tr>
+<tr><td>0024</td><td><a href="lessons/0024-graceful-termination.html"><b>우아한 종료: Pod 는 어떻게 곱게 죽나</b></a> <span class="tag">심화</span><br>preStop → SIGTERM → grace period → SIGKILL. 0002 롤링업데이트의 뒷면.</td></tr>
+<tr><td>0025</td><td><a href="lessons/0025-init-containers-sidecars.html"><b>Init 컨테이너 & 네이티브 사이드카</b></a> <span class="tag">심화</span><br>시작 순서 보장·1.28+ 사이드카 — 0016 메시 사이드카의 밑개념.</td></tr>
+<tr><td>0026</td><td><a href="lessons/0026-owner-references-gc-finalizers.html"><b>ownerReferences · GC · finalizer</b></a> <span class="tag">심화</span><br>왜 Deployment 지우면 Pod 가 따라 지워지나 — 0002 소유 체인의 진짜 엔진.</td></tr>
+<tr><td>0027</td><td><a href="lessons/0027-api-groups-versions.html"><b>API 그룹·버전·deprecation</b></a> <span class="tag">심화</span><br><code>apiVersion: apps/v1</code> 첫 줄을 읽는 법 — 매니페스트 리터러시.</td></tr>
+<tr><td>0028</td><td><a href="lessons/0028-static-pods.html"><b>Static Pod</b></a> <span class="tag">심화</span><br>kubelet 이 <code>/etc/kubernetes/manifests</code> 로 컨트롤 플레인을 부팅 — 0007 의 다음 층.</td></tr>
+</table>
+
+<div class="win">
+<b>진행 현황:</b> 전 도메인 ✅ + 사각지대 6+1 보완 + 기초 메커니즘 6 딥다이브(0023~0028) 완료.
+다음은 실제 <b>KCNA 응시</b>, 그 뒤 Level 2(<b>KCSA</b>) — 0013·0022 에서 씨 뿌린 NetworkPolicy·4C 보안이 본격화된다.
+</div>
+
+</div>
+</body>
+</html>

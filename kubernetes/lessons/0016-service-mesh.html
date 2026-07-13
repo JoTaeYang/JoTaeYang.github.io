@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0016 — Service Mesh: 사이드카가 대신 짊어지는 것들</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0016 <span class="tag">심화 · Orchestration</span></p>
+<h1>Service Mesh: 사이드카가 대신 짊어지는 것들</h1>
+<p class="subtitle">모든 서비스 코드가 각자 구현하던 mTLS·재시도·트래픽 분할·관측성을, 앱은 모른 채로 <b>인프라 계층(사이드카 프록시)</b>이 대신 짊어진다. 0013 의 L4 위에 L7 한 겹을 얹는 이야기.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> "왜 <em>또</em> 프록시냐"에 답한다 — 마이크로서비스가 늘수록 mTLS 암호화·재시도·타임아웃·트레이싱 같은
+<b>횡단 관심사(cross-cutting concern)</b>가 모든 앱에 중복 복사되던 것을, <b>0002 의 멀티 컨테이너 Pod</b> 개념으로
+사이드카에 뽑아낸다. 그리고 이게 <b>0013 의 kube-proxy(L4)</b> 와 <b>어느 층에서 어떻게 다른지</b>를 또렷이 갈라 본다.
+</div>
+
+<h2>0. 한눈에 — 도시로 비유하면</h2>
+
+<div class="aha">
+<span class="label">30초 요약 (이것만 외워도 됨)</span>
+<p><b>문제:</b> 서비스가 10개, 100개로 늘면 "상대를 믿을 수 있나(암호화·인증), 죽었으면 재시도, 느리면 타임아웃, 요청이 어디를 거쳤나" 같은 <u>똑같은 배관 코드</u>를 모든 앱이 각자 짠다. 언어마다 라이브러리도 다르다. 중복·불일치·유지보수 지옥.</p>
+<p><b>해법:</b> 그 배관을 앱 <u>바깥</u>으로 뽑아 <b>Pod 마다 붙는 작은 프록시(사이드카)</b>에 넣는다. 앱은 평소처럼 옆 서비스를 부르기만 하면, <b>프록시가 몰래 가로채</b> 암호화·재시도·계측을 다 해준다. <b>앱은 프록시가 있는 줄도 모른다.</b></p>
+<p><b>두 층으로 나뉜다:</b> 실제 트래픽을 나르는 프록시들 = <b>data plane</b>. 그 프록시들에게 "이렇게 라우팅해, 이 인증서 써" 라고 지시하는 두뇌 = <b>control plane</b>(istiod 등). 이 둘의 분리가 mesh 의 뼈대다.</p>
+</div>
+
+<div class="aha">
+<span class="label">딱 이거 하나만</span>
+<p><b>사이드카 프록시 = 각 집 문 앞에 세운 개인 경비원.</b> 집주인(앱)은 편지를 그냥 문밖에 내놓는다.
+경비원이 그걸 받아 <b>봉인(암호화)</b>하고, 상대 집 경비원의 <b>신분증을 확인(상호 인증)</b>하고,
+상대가 안 받으면 <b>다시 시도</b>하고, 오간 편지를 전부 <b>장부에 기록(관측성)</b>한다. 집주인은 이 모든 걸 모른다.</p>
+<p><b>control plane = 경비 회사 본부.</b> 모든 경비원에게 규칙을 배포한다 — "이 구역은 신입에게 10%만 보내라",
+"신분증은 이 발급기관(ServiceAccount) 것만 믿어라". 경비원은 본부 지시대로 움직일 뿐이다.</p>
+</div>
+
+<table class="cmp">
+<tr><th></th><th>Data plane</th><th>Control plane</th></tr>
+<tr><td>비유</td><td>집집마다 붙은 경비원들</td><td>경비 회사 본부</td></tr>
+<tr><td>정체</td><td>사이드카 프록시 (Envoy 등)</td><td>istiod 같은 관리 프로세스</td></tr>
+<tr><td>하는 일</td><td><b>실제 트래픽</b>을 가로채 처리</td><td>프록시들을 <b>설정·배포</b>만</td></tr>
+<tr><td>어디 사나</td><td>모든 Pod 안 (앱 컨테이너 옆)</td><td>보통 별도 namespace 에 몇 개</td></tr>
+<tr><td>죽으면</td><td>그 Pod 트래픽만 영향</td><td>새 설정만 못 받음 (기존 트래픽은 흐름)</td></tr>
+</table>
+
+<h2>1. 문제 — 횡단 관심사가 앱마다 복사된다</h2>
+
+<p>마이크로서비스에서 서비스 A 가 서비스 B 를 부를 때, "잘 부르는 것" 외에 항상 따라붙는 부담이 있다:</p>
+
+<table class="cmp">
+<tr><th>횡단 관심사</th><th>앱이 직접 하면 생기는 문제</th></tr>
+<tr><td><b>mTLS 암호화·인증</b> — 통신을 암호화하고 상대가 진짜인지 확인</td><td>언어마다 TLS 라이브러리·인증서 갱신 로직을 다 따로 구현</td></tr>
+<tr><td><b>재시도·타임아웃</b> — 실패하면 다시, 오래 걸리면 끊기</td><td>서비스마다 정책이 제각각 → 장애가 전파되거나 폭주</td></tr>
+<tr><td><b>트래픽 분할</b> — 새 버전에 10%만 (canary)</td><td>배포 도구·코드에 라우팅 로직이 박힘</td></tr>
+<tr><td><b>관측성</b> — 요청 수·지연·경로 기록</td><td>계측 코드를 모든 앱에 심고 표준을 맞춰야 함</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — 이건 라이브러리로 풀던 문제였다</span>
+과거엔 이걸 <b>공통 라이브러리</b>(예: Netflix Hystrix, gRPC 인터셉터)로 풀었다. 하지만 그러면
+<b>모든 언어로 그 라이브러리를 다시 짜야</b> 하고, 정책을 바꾸면 <b>전 서비스를 재배포</b>해야 한다.
+Service mesh 의 통찰: 이건 <b>비즈니스 로직이 아니라 인프라</b>다 → 앱 밖으로, 언어 무관한
+<b>별도 프로세스(프록시)</b>로 뽑아내자. 그럼 앱은 순수 로직만 갖고, 정책은 프록시에서 중앙 관리된다.
+</div>
+
+<h2>2. Data plane vs Control plane — 그리고 투명 가로채기</h2>
+
+<p>사이드카 프록시(보통 <b>Envoy</b>)가 각 Pod 에 주입된다. 이게 <b>data plane</b> — 실제 패킷을 만지는 층이다.
+<b>control plane</b>(Istio 의 경우 <b>istiod</b>)은 패킷을 직접 만지지 않고, 모든 Envoy 에게
+"라우팅 규칙·인증서·정책"을 <b>내려보내는</b> 역할만 한다.</p>
+
+<div class="aha">
+<span class="label">투명 가로채기 (transparent interception)</span>
+앱은 자기 옆에 프록시가 있는 줄 <b>모른다</b>. 어떻게? 사이드카가 주입될 때 Pod 안에 <b>iptables 규칙</b>이
+심어져, 앱이 내보내는/받는 모든 트래픽이 <b>자동으로 사이드카를 거치도록 리디렉션</b>된다. 앱은 그냥
+<code>http://reviews</code> 를 부를 뿐인데, 커널이 그 패킷을 몰래 로컬 프록시로 돌린다.
+<b>0013 의 DNAT 리디렉션과 같은 기법</b>이 여기서도 쓰인다 — 다만 목적지가 <em>내 Pod 안의 사이드카</em>다.
+</div>
+
+<div class="aha">
+<span class="label">0002 와 연결 — 이게 멀티 컨테이너 Pod 의 실전이다</span>
+<b>0002 에서 "한 Pod 에 컨테이너가 여러 개일 수 있다"</b>고 배웠지만 예시가 추상적이었다.
+Service mesh 가 바로 그 실전 사례다: 사이드카 주입 = Pod 안에 <b>앱 컨테이너 + 프록시 컨테이너</b>를
+나란히 넣는 것. 같은 Pod 라 <b>localhost 로 통신</b>하고 <b>생명주기를 공유</b>(0002 에서 배운 그대로)한다.
+그래서 주입 후 <code>kubectl get pod</code> 하면 <b>READY 가 1/1 → 2/2</b> 로 늘어난다 — 이게 눈에 보이는 지문이다.
+</div>
+
+<div class="note">istiod 가 프록시 설정을 계속 최신 상태로 유지하는 방식은 <b>0007 의 제어 루프</b>와 결이 같다 —
+클러스터의 "원하는 상태(어떤 서비스가 있고 어떤 라우팅 규칙이 있나)"를 감시하다, 바뀌면 프록시들에게 새 설정을 밀어 <b>실제 상태를 수렴</b>시킨다.
+Envoy 가 이 설정을 받는 프로토콜을 <b>xDS</b> 라 부르는데, 이 이름까지는 <b>심화(CKAD+ 영역)</b>다 — KCNA 는 "control plane 이 프록시를 설정한다" 수준이면 충분.</div>
+
+<h2>3. 자동 mTLS — 신원은 0008 의 ServiceAccount 에서 온다</h2>
+
+<p>mesh 의 대표 기능: <b>서비스 간 모든 통신을 자동으로 암호화 + 상호 인증(mTLS)</b>한다.
+앱 코드 한 줄 안 바꾸고 <b>zero-trust</b>(네트워크 안이라고 무조건 믿지 않음)를 얻는다.
+핵심 질문은 "그래서 <b>상대가 진짜 누구인지</b> 어떻게 아나?"이다.</p>
+
+<div class="aha">
+<span class="label">신원 = 0008 의 ServiceAccount</span>
+mesh 는 각 워크로드에 <b>인증서(cert)</b>를 발급하는데, 그 인증서에 박히는 <b>신원(identity)</b>이
+바로 <b>0008 에서 배운 ServiceAccount</b> 다. control plane 이 각 Pod 의 ServiceAccount 토큰을 근거로
+그 워크로드용 인증서를 발급하고, 두 사이드카가 통신할 때 서로의 인증서를 검증해 <b>"너 정말
+<code>bookinfo/reviews</code> 맞아?"</b>를 확인한다. 이 신원 표준을 <b>SPIFFE</b>(<code>spiffe://…/ns/…/sa/…</code>)라 부른다 —
+<b>0008 의 RBAC 이 "누가 API 를 호출할 수 있나"</b>였다면, mTLS 신원은 <b>"서비스끼리 누가 누구를 부를 수 있나"</b>로
+같은 신원 개념을 <b>데이터 평면까지</b> 확장한 것이다.
+</div>
+
+<div class="note">SPIFFE·인증서 자동 회전(rotation)의 내부는 <b>심화</b>다. KCNA 는 "mesh 가 서비스 간 통신을 mTLS 로 자동 암호화·인증한다,
+그 신원은 쿠버네티스 ID 에 기반한다" 정도까지만 물어본다.</div>
+
+<h2>4. 트래픽 관리 — 여기서 L4 가 L7 로 올라간다</h2>
+
+<p>mesh 의 프록시는 <b>애플리케이션 계층(L7)</b>을 이해한다 — HTTP 경로, 헤더, gRPC 메서드까지 본다.
+그래서 <b>0003 의 Service 가 하던 L4 로드밸런싱</b>보다 훨씬 정교한 라우팅이 된다:</p>
+
+<table class="cmp">
+<tr><th>기능</th><th>뜻</th></tr>
+<tr><td><b>가중치 라우팅 (canary)</b></td><td>v2 에 10%, v1 에 90% — 새 버전을 조금씩 노출</td></tr>
+<tr><td><b>재시도 / 타임아웃</b></td><td>실패하면 자동 재요청, 너무 느리면 끊기 (앱 밖에서)</td></tr>
+<tr><td><b>circuit breaking</b></td><td>계속 실패하는 대상은 잠시 차단해 장애 전파(연쇄 붕괴)를 막음</td></tr>
+<tr><td><b>fault injection</b></td><td>일부러 지연·에러를 주입해 "장애 나면 잘 버티나" 테스트</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">층이 다르다 — 0013 과 나란히 놓고 보라</span>
+<p><b>0013 의 kube-proxy 는 L4</b>다. 목적지 IP:포트만 보고 <b>DNAT 로 Pod 하나를 확률적으로 고른다</b>.
+HTTP 경로가 <code>/reviews</code> 인지 <code>/ratings</code> 인지, 헤더에 뭐가 있는지 <b>전혀 모른다</b>.</p>
+<p><b>mesh 의 사이드카는 L7</b>이다. 요청을 <b>HTTP 로 끝까지 해석</b>해서 "이 요청은 헤더가 <code>user: beta</code>이니 v2 로,
+경로가 <code>/health</code>이면 재시도 금지" 같은 판단을 한다. 그래서 <b>가중치 10%/90%</b> 같은 게 가능하다 — L4 로는 못 한다.</p>
+<p><b>결정적 대비:</b> mesh 는 kube-proxy 를 <em>대체하지 않는다</em>. 패킷은 여전히 <b>0013 의 도로(CNI) 위</b>를 달리고,
+Service DNS·ClusterIP 도 그대로 쓴다. mesh 는 그 위에 <b>L7 한 겹을 더 얹을</b> 뿐이다. 아래층(kube-proxy L4)은 그대로 있고,
+위층(사이드카 L7)이 새로 생긴 것 — 두 층은 공존한다.</p>
+</div>
+
+<h2>5. 관측성 공짜 — 프록시가 모든 걸 본다</h2>
+
+<p>사이드카가 <b>모든 요청을 반드시 통과</b>시키므로, 앱이 아무 계측을 안 해도 프록시가
+요청 수·지연·에러율(메트릭)과 요청 경로(트레이스)를 <b>자동 생성</b>한다.</p>
+
+<div class="aha">
+<span class="label">0014 의 관측성 3기둥과 연결</span>
+<b>0014 에서 배운 메트릭·로그·트레이스</b> 중, mesh 는 특히 <b>메트릭과 트레이스를 공짜로</b> 준다.
+0014 에서 "마이크로서비스는 요청이 여러 서비스를 거쳐 <b>트레이스</b>가 필요하다"고 했는데 —
+mesh 가 있으면 <b>각 사이드카가 요청에 추적 ID 를 이어 붙여</b> 그 트레이스를 자동으로 만들어준다.
+Istio 도, Linkerd 도 모두 <b>Prometheus 형식 메트릭</b>을 내보낸다(0014 의 pull 방식과 연결). 앱을 안 고치고 관측성을 얻는 것 —
+이게 mesh 를 도입하는 가장 흔한 첫 동기다.
+</div>
+
+<h2>6. Istio vs Linkerd — 그리고 사이드카의 값</h2>
+
+<table class="cmp">
+<tr><th></th><th>Istio</th><th>Linkerd</th></tr>
+<tr><td>프록시</td><td><b>Envoy</b> (범용, 기능 풍부)</td><td><b>Rust 마이크로프록시</b> (전용, 가벼움)</td></tr>
+<tr><td>성향</td><td>기능 많고 강력, 대신 복잡</td><td>단순·경량·빠름, 기능은 절제</td></tr>
+<tr><td>CNCF 성숙도 (0014)</td><td>graduated</td><td>graduated (최초의 mesh graduated)</td></tr>
+<tr><td>고를 때</td><td>정교한 트래픽 제어·확장성이 필요</td><td>"가볍게 mTLS·관측성만" 이면 충분</td></tr>
+</table>
+
+<div class="note">둘 다 <b>0014 에서 배운 CNCF graduated</b> 프로젝트다 — 즉 프로덕션에 널리 검증됐다는 성숙도 도장.
+"Istio=Envoy 기반 기능 부자, Linkerd=Rust 경량 단순" 이 대비 한 줄이면 KCNA 는 충분하다.</div>
+
+<div class="warn">
+<b>공짜가 아니다 — 사이드카의 값.</b> Pod <b>마다</b> 프록시가 하나씩 붙으므로 <b>메모리·CPU 오버헤드</b>가 곱해지고,
+모든 요청이 프록시 두 번(내 것 + 상대 것)을 더 거쳐 <b>약간의 지연</b>이 생긴다. 서비스가 수천 개면 이 비용이 무겁다.
+그래서 Istio 는 사이드카를 <b>없앤</b> <b>ambient mesh</b> 모드(공유 노드 프록시 + 필요 시 L7 프록시)를 내놨다 — 오버헤드를 줄이는 최신 방향인데,
+이건 <b>심화(KCNA 범위 밖)</b>다. KCNA 는 "사이드카 = Pod 마다 프록시 = 오버헤드가 있다"까지면 된다.
+</div>
+
+<h2>7. 요청의 여정 — 한 호출이 프록시 두 개를 지난다</h2>
+
+<p>실제 istio 설치·설정은 <b>CKAD+ 영역</b>이라 여기선 개념 트레이스로 본다. 시나리오: <code>productpage</code> Pod 가
+<code>reviews</code> 서비스를 호출한다. 두 Pod 모두 사이드카가 주입된 상태(<b>READY 2/2</b>)다.</p>
+
+<div class="cluster"><span class="ctx">한 요청의 일생 (mesh 안에서)</span>
+<span class="out">  productpage 앱     <span class="hl">GET http://reviews/…</span>   ← 앱은 평범하게 부를 뿐
+       │
+  ① iptables 리디렉션   커널이 이 패킷을 <span class="hl">내 Pod 안 사이드카</span>로 몰래 돌림
+       │                 └ 앱은 프록시 존재를 모름 (투명 가로채기)
+       ▼
+  ② 내 사이드카 (Envoy)  · 목적지 결정: reviews-v1 90% / v2 10% 중 선택 (L7)
+       │                 · <span class="hl">mTLS 로 봉인</span> + 상대 인증서 검증 준비
+       │                 · 트레이스 ID·메트릭 기록 시작 (0014)
+       ▼
+  ③ 네트워크 이동        <span class="hl">0013 의 도로(CNI) 위</span>를 달림 — Service DNS·ClusterIP 그대로 사용
+       │                 └ mesh 는 이 L4 배관을 대체하지 않고 그 위에 얹힌다
+       ▼
+  ④ 상대 사이드카        · <span class="hl">mTLS 복호화</span> + "너 정말 productpage 맞아?" 신원 확인 (SPIFFE=0008)
+       │                 · 재시도·타임아웃·circuit breaking 정책 적용
+       │                 · 여기서도 메트릭·트레이스 기록
+       ▼
+  ⑤ reviews 앱          localhost 로 평문 수신 → 응답
+       │                 └ 상대 앱도 프록시가 있는 줄 모름
+       ▼
+  응답은 역방향          같은 두 프록시를 거꾸로 통과하며 복호화·계측
+  <span class="hl">200 OK  (+ 자동 생성된 트레이스 한 스팬)</span></span>
+</div>
+
+<div class="aha">
+<span class="label">두 개의 프록시, 하나의 규칙</span>
+<p>한 번의 호출이 <b>사이드카를 두 번</b> 지난다 — <b>내 것(②)</b>과 <b>상대 것(④)</b>. mTLS 는
+이 <b>두 프록시 사이</b>에서 일어난다(앱↔프록시 구간은 localhost 평문). 그래서 앱은 암호화를 전혀 안 하는데도
+<b>네트워크를 도는 구간은 전부 암호화</b>된다. 그리고 <b>③ 은 여전히 0013 의 세계</b>다 —
+DNS 로 이름 풀고, ClusterIP 로 DNAT 되고, CNI 도로를 달린다. <b>mesh 는 그 위에 ②·④ 를 얹었을 뿐</b>이다.</p>
+</div>
+
+<h2>8. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. Service mesh 의 data plane 과 control plane 을 옳게 짝지은 것은?</p>
+  <div class="opts">
+    <button class="opt">data plane = istiod (규칙 배포) / control plane = 각 Pod 의 사이드카 (트래픽 처리)</button>
+    <button class="opt" data-correct="true">data plane = 각 Pod 의 사이드카 프록시 (실제 트래픽 처리) / control plane = istiod 등 (프록시를 설정)</button>
+    <button class="opt">둘 다 kube-proxy 가 겸한다</button>
+  </div>
+  <div class="explain">data plane 은 실제 패킷을 나르고 가로채는 층 — Pod 마다 붙는 Envoy 같은 사이드카다. control plane(istiod)은 패킷을 직접 만지지 않고 모든 사이드카에 라우팅·인증서·정책을 내려보낸다. 경비원(data)과 경비 회사 본부(control)의 관계다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. (레슨 0013 복습) mesh 의 사이드카 라우팅이 0013 의 kube-proxy 로드밸런싱과 근본적으로 다른 점은?</p>
+  <div class="opts">
+    <button class="opt">사이드카가 kube-proxy 를 완전히 대체해서 ClusterIP·CNI 가 더는 필요 없다</button>
+    <button class="opt" data-correct="true">kube-proxy 는 IP:포트만 보는 L4 인데, 사이드카는 HTTP 경로·헤더까지 해석하는 L7 이라 canary 10%/90% 같은 세밀한 라우팅이 된다 (두 층은 공존)</button>
+    <button class="opt">사이드카는 L3(IP)만 보고 kube-proxy 가 L7 을 담당한다</button>
+  </div>
+  <div class="explain">kube-proxy 는 L4 — 목적지 IP:포트만 보고 DNAT 로 Pod 를 확률적으로 고른다(0013). HTTP 경로·헤더는 모른다. 사이드카는 L7 이라 요청을 HTTP 로 해석해 가중치·헤더 기반 라우팅을 한다. 중요한 건 대체가 아니라 공존 — 패킷은 여전히 CNI 도로를 달리고 ClusterIP 도 그대로 쓰며, mesh 는 그 위에 L7 한 겹을 얹는다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0002·0008 복습) 사이드카가 주입된 Pod 에서 관찰되는 것과, 자동 mTLS 신원의 근거를 옳게 묶은 것은?</p>
+  <div class="opts">
+    <button class="opt">Pod 가 두 개로 쪼개지고(READY 1/1 두 개), 신원은 Pod IP 로 판별한다</button>
+    <button class="opt" data-correct="true">한 Pod 안에 앱+프록시 컨테이너가 나란히 들어가 READY 가 2/2 가 되고(0002 멀티컨테이너), mTLS 신원은 0008 의 ServiceAccount 기반 인증서(SPIFFE)다</button>
+    <button class="opt">사이드카는 별도 Pod 로 뜨고, 신원은 노드의 kubelet 인증서를 공유한다</button>
+  </div>
+  <div class="explain">사이드카 주입 = 0002 에서 배운 멀티 컨테이너 Pod 의 실전이다. 앱과 프록시가 같은 Pod 에 나란히 들어가 localhost 로 통신하고 생명주기를 공유하며, READY 가 1/1→2/2 로 는다. mTLS 신원은 Pod IP(계속 바뀜) 같은 게 아니라 0008 의 ServiceAccount 에 기반한 인증서(SPIFFE)다 — RBAC 신원 개념을 서비스 간 통신까지 확장한 것.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2·Q3 를 맞히면 mesh 의 뼈대(왜/무엇 · data vs control · 사이드카 · mTLS · L4 vs L7)가 <b>✅</b> —
+KCNA 가 요구하는 깊이는 여기까지다(xDS·ambient·SPIFFE 내부는 심화). 다음은 <b>KCNA 전 도메인 모의 진단</b>으로
+Fundamentals·오케스트레이션·아키텍처·관측성·딜리버리를 섞어 마지막 갭을 확인하고 <b>응시 일정</b>을 잡는다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">mesh 는 단어가 많고 "왜 또 프록시?"에서 막히기 쉽다. 궁금한 것만 펼쳐 보면 된다.</p>
+
+<details class="faq">
+<summary>이미 Service(0003)가 있는데 왜 mesh 가 또 필요해요?</summary>
+<div class="a"><p>Service 는 <b>L4</b>다 — "이 이름으로 온 트래픽을 살아있는 Pod 아무거나로 분산"까지가 전부(0013). "새 버전에 10%만", "실패하면 재시도", "통신을 암호화·상호인증", "요청 경로를 추적" 같은 건 못 한다. mesh 는 그걸 <b>Service 위에 L7 로 얹는</b> 것이다. Service 를 대체하는 게 아니라 그 위층이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>사이드카가 정확히 뭐예요? Pod 가 두 개 되는 건가요?</summary>
+<div class="a"><p>Pod 는 하나 그대로다. 그 <b>하나의 Pod 안에 컨테이너가 하나 더</b>(프록시) 들어가는 것이다 — <b>0002 에서 배운 멀티 컨테이너 Pod</b>가 정확히 이거다. 같은 Pod 라 localhost 로 통신하고 생명주기를 공유한다. 그래서 <code>kubectl get pod</code> 의 READY 가 <b>1/1 → 2/2</b> 로 바뀌는 게 눈에 보인다.</p></div>
+</details>
+
+<details class="faq">
+<summary>앱이 프록시를 "모른다"는 게 어떻게 가능해요?</summary>
+<div class="a"><p>주입 시 Pod 안에 <b>iptables 규칙</b>이 심겨, 앱이 내보내고 받는 트래픽을 커널이 <b>자동으로 사이드카로 리디렉션</b>한다. 앱은 그냥 <code>http://reviews</code> 를 부를 뿐인데 그 패킷이 몰래 로컬 프록시를 거친다. <b>0013 의 DNAT 리디렉션</b>과 같은 커널 기법이다 — 다만 목적지가 내 Pod 안 사이드카다. 그래서 앱 코드는 한 줄도 안 바뀐다.</p></div>
+</details>
+
+<details class="faq">
+<summary>mTLS 는 어디서 어디까지 암호화돼요? 앱까지도요?</summary>
+<div class="a"><p>암호화되는 건 <b>사이드카 ↔ 사이드카</b> 구간, 즉 네트워크를 도는 부분이다. 앱과 자기 사이드카 사이는 같은 Pod 안 <b>localhost 라 평문</b>이다. 그래서 앱은 평문으로 주고받는데도 <b>노드를 떠나는 트래픽은 전부 암호화</b>되는 것 — 앱 코드는 TLS 를 몰라도 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>"신원이 ServiceAccount"라는 게 무슨 뜻이에요? (0008)</summary>
+<div class="a"><p>mTLS 로 상호 인증하려면 "너 진짜 누구야?"의 <b>기준</b>이 있어야 한다. mesh 는 그 기준으로 <b>0008 의 ServiceAccount</b>를 쓴다 — control plane 이 각 Pod 의 ServiceAccount 를 근거로 인증서를 발급하고, 사이드카끼리 그 인증서를 검증한다. 이 신원 표기 표준이 <b>SPIFFE</b>(<code>spiffe://…/ns/…/sa/…</code>)다. RBAC 이 "누가 API 를 부르나"였다면, 이건 "서비스끼리 누가 누구를 부르나"로 같은 신원 개념의 확장이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Envoy 가 뭐예요? Istio 랑 같은 건가요?</summary>
+<div class="a"><p>다르다. <b>Envoy</b> = 고성능 프록시(data plane) 그 자체. <b>Istio</b> = 그 Envoy 들을 <b>관리·설정</b>하는 control plane 을 얹은 완성품(mesh)이다. Istio 를 쓰면 사이드카로 들어가는 게 Envoy 다. Linkerd 는 Envoy 대신 자체 <b>Rust 마이크로프록시</b>를 쓴다 — 그래서 더 가볍다.</p></div>
+</details>
+
+<details class="faq">
+<summary>control plane 이 죽으면 트래픽도 멈춰요?</summary>
+<div class="a"><p>아니다. control plane(istiod)은 <b>설정을 배포</b>할 뿐, 실제 트래픽은 사이드카(data plane)가 나른다. istiod 가 잠깐 죽어도 사이드카는 <b>마지막으로 받은 설정으로 계속</b> 동작한다 — 다만 그동안 <b>새 라우팅 규칙·새 인증서를 못 받을</b> 뿐이다. data/control 분리 덕에 얻는 견고함이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>관측성이 "공짜"라는 게 정말 아무것도 안 해도 돼요?</summary>
+<div class="a"><p>메트릭(요청 수·지연·에러율)은 사실상 공짜다 — 사이드카가 모든 요청을 보니 자동 집계한다(<b>0014 의 메트릭 기둥</b>, Prometheus 형식). <b>분산 트레이스</b>는 거의 공짜인데, 사이드카가 추적 ID 를 이어 붙이려면 앱이 그 헤더를 <b>다음 호출로 전달(propagate)</b>해줘야 완벽해진다. 그 한 가지만 앱이 도와주면 나머지는 mesh 가 한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>circuit breaking 이랑 재시도, 뭐가 달라요?</summary>
+<div class="a"><p><b>재시도</b>는 "이번 요청이 실패했으니 <b>다시</b> 보내자". <b>circuit breaking</b>은 "이 대상이 계속 실패하니 <b>당분간 아예 안 보내고</b> 빨리 실패시키자"다. 재시도만 있으면 죽어가는 서비스에 요청이 몰려 <b>연쇄 붕괴</b>가 나는데, circuit breaker 가 그 앞에서 문을 닫아 장애 전파를 막는다. 둘은 짝으로 쓴다.</p></div>
+</details>
+
+<details class="faq">
+<summary>이 내용이 KCNA 에 다 나와요? 어디까지가 심화예요?</summary>
+<div class="a"><p><b>KCNA 범위:</b> mesh 가 무엇을·왜, <b>data plane vs control plane</b>, 사이드카 개념, 자동 <b>mTLS</b> — 여기까지다. <b>심화(범위 밖):</b> Envoy 의 <b>xDS</b> 프로토콜, <b>SPIFFE</b> 인증서 회전 내부, <b>ambient mesh</b>(사이드카 없는 모드), L7 라우팅 세부 설정은 CKAD+·실무 몫이다. 이 레슨은 심화 조각까지 <b>맛보되 이름표만</b> 붙였다 — 과투자 금지.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://istio.io/latest/docs/concepts/what-is-istio/">Istio: What is Istio?</a> — data/control plane, 사이드카, mTLS 의 원전.
+<a href="https://linkerd.io/2/overview/">Linkerd Overview</a> 로 경량 mesh 관점을,
+<a href="https://www.cncf.io/projects/">CNCF Projects</a> 로 Istio·Linkerd 의 graduated 성숙도(0014)를 확인할 수 있다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "ambient mesh 가 사이드카를 어떻게 없앴나?", "Gateway API 는 Ingress·mesh 와 어떻게 엮이나?",
+"mesh 없이 NetworkPolicy(0013)만으로 zero-trust 를 어디까지?" — 마지막 질문은 보안 트랙(KCSA)으로 이어지는 실이다.
+</div>
+
+<nav class="nav">
+  <a href="0015-kcna-mock-diagnostic.html">← 0015 모의 진단</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

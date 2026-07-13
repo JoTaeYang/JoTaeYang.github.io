@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0010 — 외부 노출 3단: ClusterIP 밖으로 나가는 세 개의 문</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0010 <span class="tag">Level 1 · 실습</span></p>
+<h1>외부 노출 3단: ClusterIP 밖으로 나가는 세 개의 문</h1>
+<p class="subtitle">0003 의 ClusterIP 는 클러스터 <em>안</em>에서만 통했다. 밖에서 접속하려면 세 단계로 문을 넓힌다 — NodePort, LoadBalancer, Ingress.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> 같은 Deployment 에 Service type 을 <code>ClusterIP → NodePort → LoadBalancer</code>
+로 바꿔가며 <code>kubectl get svc</code> 한 줄이 어떻게 달라지는지 본다. NodePort 의
+<code>3xxxx</code> 포트가 열리고, LoadBalancer 의 EXTERNAL-IP 가 <code>&lt;pending&gt;</code> 에 멈추는
+"그 멈춤"이 바로 오늘의 핵심 교훈이다.
+</div>
+
+<h2>1. 프레임 — 같은 Pod, 점점 넓어지는 문</h2>
+
+<p>네 type 은 계단이다. 위 칸은 아래 칸을 <b>포함</b>한다 — NodePort 는 ClusterIP 를 그대로 갖고 그 위에 포트를 열고, LoadBalancer 는 NodePort 를 갖고 그 위에 외부 LB 를 얹는다.</p>
+
+<table class="cmp">
+<tr><th>type</th><th>도달 범위</th><th>누가 만들어 주나</th><th>계층</th></tr>
+<tr>
+  <td><b>ClusterIP</b> (기본)</td>
+  <td>클러스터 <b>안</b>에서만</td>
+  <td>쿠버네티스 (0003)</td>
+  <td>L4 (TCP/UDP)</td>
+</tr>
+<tr>
+  <td><b>NodePort</b></td>
+  <td><b>모든 노드</b>의 <code>노드IP:3xxxx</code></td>
+  <td>쿠버네티스 (kube-proxy 가 포트 오픈)</td>
+  <td>L4</td>
+</tr>
+<tr>
+  <td><b>LoadBalancer</b></td>
+  <td>하나의 <b>외부 IP</b></td>
+  <td><b>클라우드</b> (AWS/GCP…의 LB 프로비저닝)</td>
+  <td>L4</td>
+</tr>
+<tr>
+  <td><b>Ingress</b></td>
+  <td>host/path 로 <b>여러 Service</b>를 한 입구에</td>
+  <td><b>Ingress 컨트롤러</b> (nginx 등, 별도 설치)</td>
+  <td>L7 (HTTP)</td>
+</tr>
+</table>
+
+<div class="aha">
+<span class="label">아하</span>
+Service type 3 개는 전부 <b>L4</b>(포트 단위)다 — "이 포트로 온 걸 이 Pod 들에게". Ingress 만
+<b>L7</b>(HTTP 단위)이라 <em>URL 을 읽고</em> <code>/api</code> 는 이 Service, <code>shop.example.com</code> 은
+저 Service 로 나눈다. 그래서 Ingress 는 Service 를 <em>대체</em>하는 게 아니라 여러 ClusterIP Service
+<em>앞에</em> 서는 문지기다. LoadBalancer 를 Service 마다 하나씩 사면 비싸니까, Ingress 하나로 묶는다.
+</div>
+
+<h2>2. 실습 — type 을 바꾸며 <code>get svc</code> 를 읽는다</h2>
+
+<div class="note">kind 클러스터 <code>mastery</code>, namespace <code>lab</code> 이어서. 없으면 <code>kubectl create namespace lab &amp;&amp; kubectl config set-context --current --namespace=lab</code>.</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl create deployment web --image=nginx:1.27 --replicas=2</span>
+<span class="prompt">$</span> <span class="cmd">kubectl expose deployment web --port=80        # 기본 type=ClusterIP</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get svc web</span>
+<span class="out">NAME   TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)
+web    ClusterIP   10.96.145.12    &lt;none&gt;        80/TCP     ← 밖에서 갈 문이 없다</span>
+</div>
+
+<p><b>추적 1 — NodePort 로 승격.</b> 기존 Service 의 type 만 바꾼다.</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl patch svc web -p '{"spec":{"type":"NodePort"}}'</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get svc web</span>
+<span class="out">NAME   TYPE       CLUSTER-IP     EXTERNAL-IP   PORT(S)
+web    NodePort   10.96.145.12   &lt;none&gt;        <span class="hl">80:31842/TCP</span>   ← 80 은 그대로, 31842 가 새로</span>
+</div>
+
+<p><code>80:31842</code> 를 읽어라: 안쪽 ClusterIP 의 <code>80</code> 은 그대로 살아 있고(포함!),
+그 위에 모든 노드의 <code>31842</code> 포트가 새로 열렸다. 범위는 항상 <code>30000–32767</code> 이다.
+kind 는 노드가 도커 컨테이너라 <code>노드IP:31842</code> 를 호스트에서 바로 치기 번거로우니,
+도달 자체는 <code>port-forward</code> 로 확인한다:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl port-forward svc/web 8080:80</span>
+<span class="prompt">$</span> <span class="cmd">curl -s localhost:8080 | grep -o '&lt;title&gt;.*&lt;/title&gt;'</span>
+<span class="out">&lt;title&gt;Welcome to nginx!&lt;/title&gt;</span>
+</div>
+
+<div class="note">실제 클라우드/온프렘 노드라면 <code>curl http://&lt;노드IP&gt;:31842</code> 가 바로 됐을 것이다. kind 에서 진짜 NodePort 를 호스트로 뚫으려면 클러스터 생성 시 <code>extraPortMappings</code> 가 필요하다 — 지금은 개념 확인이 목적이라 port-forward 로 충분하다.</div>
+
+<p><b>추적 2 — LoadBalancer 로 승격, 그리고 멈춤을 관찰.</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl patch svc web -p '{"spec":{"type":"LoadBalancer"}}'</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get svc web</span>
+<span class="out">NAME   TYPE           CLUSTER-IP     EXTERNAL-IP     PORT(S)
+web    LoadBalancer   10.96.145.12   <span class="hl">&lt;pending&gt;</span>       80:31842/TCP    ← 영원히 pending</span>
+</div>
+
+<div class="warn">
+<b>이 <code>&lt;pending&gt;</code> 이 오늘의 진짜 교훈이다.</b> LoadBalancer 는 쿠버네티스가 아니라
+<b>클라우드</b>가 실제 로드밸런서를 만들어 IP 를 채워 넣어야 완성된다. 순수 kind 에는 그 클라우드가
+없으니 영원히 <code>&lt;pending&gt;</code> 이다 — 고장이 아니라 <em>"나는 외부 인프라에 의존한다"</em>는 선언이다.
+EKS/GKE 였다면 몇 초 뒤 진짜 IP 가 찍힌다. (kind 에서도 보고 싶으면 <code>cloud-provider-kind</code> 나
+MetalLB 를 설치하면 된다 — 선택 사항.)
+</div>
+
+<p>정리: <code>kubectl delete ns lab</code>. (port-forward 는 <code>Ctrl-C</code> 로 먼저 종료.)</p>
+
+<h2>3. Ingress — 문 하나로 여러 앱 (L7)</h2>
+
+<p>Service 셋은 "포트 하나 = 앱 하나"였다. 앱이 열 개면 LoadBalancer 열 개(=비용 열 배)가 된다.
+Ingress 는 <b>HTTP 를 읽어</b> 하나의 입구에서 URL 로 갈래를 튼다:</p>
+
+<div class="cluster"><span class="ctx">web-ingress.yaml (개념 예시)</span>
+<span class="out">apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shop
+spec:
+  rules:
+  - host: shop.example.com
+    http:
+      paths:
+      - path: /api        <span class="hl"># shop.example.com/api  → api-svc</span>
+        pathType: Prefix
+        backend: { service: { name: api-svc, port: { number: 80 } } }
+      - path: /           <span class="hl"># 나머지 전부       → web-svc</span>
+        pathType: Prefix
+        backend: { service: { name: web-svc, port: { number: 80 } } }</span>
+</div>
+
+<div class="note">
+Ingress 는 <b>규칙(YAML)</b>일 뿐, 그 규칙을 실행할 <b>Ingress 컨트롤러</b>(ingress-nginx 등)가
+클러스터에 설치돼 있어야 실제로 동작한다 — Role 만 있고 실행 주체가 없으면 무력했던 RBAC(0008)과 같은 구조다.
+kind 에서 손으로 돌려보고 싶으면 아래 Source 의 "Ingress in kind" 가이드를 따르면 되지만, KCNA 는
+<b>개념</b>(L7 라우팅, 컨트롤러 필요)까지면 충분하다 — 실습은 CKAD 에서.
+</div>
+
+<h2>4. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. Service type 을 ClusterIP 에서 NodePort 로 바꿨다. 안쪽 ClusterIP 는 어떻게 되나?</p>
+  <div class="opts">
+    <button class="opt">사라지고 노드 포트만 남는다 — type 은 하나만 가질 수 있다</button>
+    <button class="opt" data-correct="true">그대로 살아 있다 — NodePort 는 ClusterIP 위에 포트를 <b>더</b> 얹은 것</button>
+    <button class="opt">랜덤 IP 로 새로 발급된다 — type 이 바뀌면 재생성된다</button>
+  </div>
+  <div class="explain">type 은 계단이라 위 칸이 아래 칸을 포함한다. <code>get svc</code> 의 <code>80:31842</code> 가 증거 — <code>80</code>(ClusterIP)은 그대로고 <code>31842</code>(노드 포트)가 추가됐다. 클러스터 내부 접근은 여전히 ClusterIP 로 된다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. 순수 kind 클러스터에서 LoadBalancer Service 의 EXTERNAL-IP 가 계속 <code>&lt;pending&gt;</code> 이다. 원인은?</p>
+  <div class="opts">
+    <button class="opt">selector 오타로 EndpointSlice 가 비어 IP 를 못 받는다</button>
+    <button class="opt">NodePort 를 먼저 만들지 않아 순서가 꼬였다</button>
+    <button class="opt" data-correct="true">외부 LB 를 만들어 줄 <b>클라우드 컨트롤러가 없다</b> — LoadBalancer 는 외부 인프라 의존</button>
+  </div>
+  <div class="explain">LoadBalancer 는 쿠버네티스 자체 기능이 아니라 "클라우드야, LB 하나 만들고 IP 알려줘"라는 요청이다. 그 클라우드가 없으면 요청은 영원히 대기한다 — 고장이 아니라 환경의 한계다. EKS/GKE 나 MetalLB 가 그 자리를 채운다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0003 복습) 한 도메인 아래 <code>/api</code> 와 <code>/</code> 를 서로 다른 Service 로 보내려 한다. 무엇을 쓰나?</p>
+  <div class="opts">
+    <button class="opt">NodePort 두 개를 만들고 클라이언트가 포트로 구분한다</button>
+    <button class="opt" data-correct="true">Ingress — L7 에서 path 를 읽어 각각 다른 ClusterIP Service 로 라우팅</button>
+    <button class="opt">ClusterIP 하나에 selector 를 두 벌 달아 나눈다</button>
+  </div>
+  <div class="explain">path/host 로 가르는 건 URL(HTTP)을 읽어야 하는 L7 일 = Ingress 의 몫이다. Service(L4)는 포트만 보므로 <code>/api</code> 와 <code>/</code> 를 구분할 수 없다. Ingress 뒤에는 여전히 0003 의 평범한 ClusterIP Service 들이 선다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2 를 맞히면 외부 노출 3단 ✅ — 다음은 <b>스토리지(PV / PVC / StorageClass)</b>.
+0009 에서 예고한 StatefulSet 의 <code>volumeClaimTemplates</code> 가 여기서 이어진다.
+이걸로 KCNA Fundamentals(비중 46%)의 ⬜ 칸이 거의 다 채워진다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">실습하다 떠오르는 "어? 이건 왜 이러지?"를 미리 모았다. 궁금한 것만 펼쳐 보면 된다 — 안 궁금하면 접힌 채 넘어가도 된다.</p>
+
+<details class="faq">
+<summary>NodePort 포트는 왜 하필 <code>30000–32767</code> 이에요? 그냥 80 쓰면 안 되나요?</summary>
+<div class="a"><p>낮은 포트(80, 443 등)는 노드의 시스템 서비스와 충돌할 수 있어, 겹치지 않는 높은 대역을 따로 떼어 뒀다. 특정 번호를 원하면 <code>spec.ports[].nodePort: 30080</code> 처럼 그 범위 안에서 지정할 수 있고, 안 정하면 자동 배정된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>NodePort 면 그 포트가 <b>딱 그 Pod 가 있는 노드</b>에서만 열리나요?</summary>
+<div class="a"><p>아니다 — <b>모든</b> 노드에서 열린다. 3번 노드로 요청이 와도 kube-proxy 가 실제 Pod 가 있는 노드로 내부 전달한다. 그래서 아무 노드 IP 로나 접속해도 된다. "어느 노드에 Pod 가 떴는지" 신경 안 써도 되는 게 장점이다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>port-forward</code> 랑 NodePort 는 같은 건가요?</summary>
+<div class="a"><p>다르다. <code>port-forward</code> 는 내 <code>kubectl</code> 이 API server 를 거쳐 만드는 <b>임시 개인 터널</b>이다 — 명령을 끄면 사라지고, 나만 쓴다. NodePort 는 클러스터에 <b>상시로 열린 진짜 문</b>이다. 오늘은 kind 사정상 도달 확인만 port-forward 로 편하게 한 것뿐이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>LoadBalancer 가 <code>&lt;pending&gt;</code> 이면 실습이 실패한 건가요?</summary>
+<div class="a"><p>아니다, 그게 정상이고 오늘의 교훈이다. LoadBalancer 는 "클라우드야 LB 만들어줘"라는 <em>요청</em>이라, 클라우드가 없는 kind 에선 응답할 주체가 없어 대기 상태로 남는다. EKS/GKE 라면 IP 가 찍힌다. 굳이 kind 에서 보려면 <code>cloud-provider-kind</code> 나 MetalLB 를 설치하면 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Ingress 를 만들었는데 아무 일도 안 일어나요.</summary>
+<div class="a"><p>Ingress 리소스는 <em>규칙</em>일 뿐, 그걸 실행할 <b>Ingress 컨트롤러</b>(ingress-nginx 등)를 클러스터에 설치해야 동작한다. Role 만 있고 RoleBinding 이 없으면 무력했던 0008 과 똑같은 구조다 — 규칙과 실행 주체는 별개다.</p></div>
+</details>
+
+<details class="faq">
+<summary>그럼 Ingress 자체는 어떻게 밖에서 접속돼요?</summary>
+<div class="a"><p>Ingress 컨트롤러 자신이 보통 <b>LoadBalancer(또는 NodePort) Service 하나</b>로 노출된다. 즉 "외부 IP 하나 → Ingress 컨트롤러 → path/host 로 갈라 여러 ClusterIP Service". LB 를 앱마다 사는 대신 <em>컨트롤러 앞에 하나만</em> 두는 게 비용 절감의 핵심이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>path 라우팅이 되면 Ingress 하나로 다 되는데 왜 Service 가 여전히 필요해요?</summary>
+<div class="a"><p>Ingress 는 "어느 Service 로 보낼지"만 정하고, 실제로 살아있는 Pod 목록을 추적해 부하를 나누는 건 여전히 Service+EndpointSlice(0003)의 몫이다. Ingress 뒤에는 항상 평범한 ClusterIP Service 들이 선다 — 대체가 아니라 층이 하나 더 얹힌 것이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>LoadBalancer 랑 Ingress, 둘 다 외부 노출인데 뭘 써야 해요?</summary>
+<div class="a"><p>TCP/포트 단위면 LoadBalancer(L4), HTTP/URL 단위 라우팅이 필요하면 Ingress(L7). 웹앱 여러 개를 도메인·경로로 나눠 한 입구에 모으는 대부분의 경우가 Ingress 다. gRPC 아닌 임의 TCP(예: DB 포트 노출)는 LoadBalancer 가 맞다.</p></div>
+</details>
+
+<details class="faq">
+<summary>ClusterIP 없이 바로 외부로 열 수는 없나요?</summary>
+<div class="a"><p>없다 — NodePort·LoadBalancer 는 <b>내부에 ClusterIP 를 반드시 갖고</b> 그 위에 층을 얹는 구조다(<code>get svc</code> 의 <code>80:31842</code> 가 그 증거). 안쪽 ClusterIP 가 Pod 들에게 부하를 나누는 실체이고, 바깥 문들은 그리로 가는 통로일 뿐이다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>kubectl expose</code> 랑 <code>kubectl patch</code>, YAML 로도 되죠?</summary>
+<div class="a"><p>물론이다. 오늘은 흐름을 빨리 보려 명령형(imperative)을 썼지만, 실무·GitOps 에선 Service YAML 에 <code>type: NodePort</code> 를 적어 <code>apply</code> 한다. CKAD 실기에선 <code>expose</code> 같은 명령형이 시간 절약이라, 둘 다 손에 익혀 두면 좋다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/services-networking/service/">공식 문서: Service (type 별 설명)</a> ·
+<a href="https://kubernetes.io/docs/concepts/services-networking/ingress/">Ingress</a> ·
+<a href="https://kind.sigs.k8s.io/docs/user/ingress/">Ingress in kind</a> — 손으로 Ingress 를 돌려보고 싶을 때의 셋업 가이드(선택).
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "<code>externalTrafficPolicy</code> 가 뭐지?", "Ingress 랑 Gateway API 차이는?",
+"headless service(0009)는 이 type 표 어디에 들어가지?" — 전부 CKA/CKAD 로 이어지는 좋은 실이다.
+</div>
+
+<nav class="nav">
+  <a href="0009-workload-family.html">← 0009 워크로드 4형제</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

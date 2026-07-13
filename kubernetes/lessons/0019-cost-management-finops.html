@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0019 — 비용 관리와 FinOps: requests 가 곧 청구서다</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0019 <span class="tag">심화 · Observability</span></p>
+<h1>비용 관리와 FinOps: requests 가 곧 청구서다</h1>
+<p class="subtitle">비용도 하나의 신호다 — 측정 못 하면 최적화 못 한다. <b>0006 에서 배운 requests</b> 가 어떻게 그대로 매달 나가는 돈이 되는지, 눈으로 본다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> "왜 비용이 <em>관측성</em> 도메인이지?"의 답을 잡는다 —
+비용은 메트릭·로그·트레이스(<b>0014</b>)의 사촌인 <b>네 번째 신호</b>다. 그리고 <b>0006 의 requests(예약)</b> 가
+어떻게 유휴 노드 → 더 많은 노드 → 더 큰 청구서로 이어지는지를 <code>kubectl describe node</code> 로
+직접 보고, OpenCost·FinOps·showback/chargeback 이라는 KCNA 어휘에 손맛을 붙인다.
+</div>
+
+<h2>0. 왜 관측성 도메인인가 — 비용은 신호다</h2>
+
+<div class="aha">
+<span class="label">딱 이 한 줄</span>
+<b>측정할 수 없으면 최적화할 수 없다.</b> 메트릭이 "CPU 얼마나 쓰나"를 보여주듯, 비용은
+"그 리소스에 <em>얼마 내고 있나</em>"를 보여주는 신호다. <b>0014</b> 의 관측성 3기둥(메트릭·로그·트레이스)이
+"시스템이 <em>어떻게</em> 도나"를 본다면, 비용 가시성은 "그게 <em>얼마짜리인가</em>"를 본다.
+그래서 KCNA 는 비용을 <b>관측성(Observability)</b> 도메인에 넣는다 — 놓치기 쉬운 항목이다.
+</div>
+
+<p>클라우드에서 쿠버네티스는 편하지만, 편한 만큼 <b>돈이 어디로 새는지 안 보인다</b>.
+Pod 하나가 노드 어디에 떠서 얼마를 먹는지 청구서엔 안 찍힌다 — 청구서엔 "노드 10대" 라고만 나온다.
+그 10대가 왜 10대인지, 절반이 놀고 있진 않은지를 <b>보이게 만드는 것</b>이 이 레슨의 주제다.</p>
+
+<h2>1. THE 핵심 연결 — requests 는 예약이고, 예약은 돈이다</h2>
+
+<p><b>0006</b> 에서 못 박은 문장을 다시 꺼낸다: <b>requests 는 예약이다.</b> 스케줄러는 노드의
+<em>실제 사용량</em>이 아니라 <em>requests 의 합계</em>로 자리를 잡는다(호텔 예약 장부). 이 한 문장이
+비용의 뿌리다. requests 를 실사용보다 높게 잡으면 무슨 일이 벌어지는지 따라가 보자:</p>
+
+<table class="cmp">
+<tr><th>단계</th><th>무슨 일</th><th>결과</th></tr>
+<tr><td>① 과대 requests</td><td>Pod 가 실제로 200m 쓰는데 <code>requests: 1</code> 로 예약</td><td>노드 장부에 800m 이 "예약됐지만 유휴"로 잠김</td></tr>
+<tr><td>② bin-packing 악화</td><td>장부가 빨리 차니 노드에 Pod 를 촘촘히 못 채움</td><td>노드가 반만 차도 "예약 만석" → 새 Pod 는 <code>Pending</code>(0006)</td></tr>
+<tr><td>③ 오토스케일 발동</td><td>Pending 을 풀려고 Cluster Autoscaler 가 노드 추가(0012)</td><td>실사용은 그대로인데 <b>노드 수만 증가</b></td></tr>
+<tr><td>④ 청구서</td><td>노드 = 클라우드 인스턴스 = 시간당 요금</td><td><b>안 쓰는 예약에 매달 돈을 낸다</b></td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — requests 는 비용 레버다</span>
+<b>0006 의 requests 가 그대로 비용 다이얼이다.</b> 노드 실사용이 30% 인데 청구서가 꽉 찬 이유는
+거의 항상 "requests 과대 예약 → bin-packing 이 나빠 노드가 더 필요" 이 경로다.
+0006 Q1("실사용 10% 인데 Pending")에서 봤던 그 예약 장부가, 규모가 커지면 <b>낭비되는 노드 대수</b>로 번역된다.
+CPU 를 아무리 안 써도 <em>예약</em>이 잡혀 있으면 그 자리엔 돈이 나간다.
+</div>
+
+<div class="note">그림으로: 노드 용량 100. Pod A 가 실제 20 을 쓰는데 requests 80 으로 예약하면,
+남은 20 에는 작은 Pod 하나밖에 못 들어간다. 나머지 60 은 "비어 있지만 예약 만석"이라 새 Pod 는
+Pending → 노드 한 대가 더 뜬다. <b>물리적으론 40 만 쓰는데 노드 2대 값</b>을 낸다.</div>
+
+<h2>2. Right-sizing — 예약을 실사용에 맞추는 기술</h2>
+
+<p>해법은 단순하다: <b>requests 를 실제 사용량에 가깝게</b> 맞춘다(right-sizing). 하지만 양쪽 다 위험하다 —
+이건 <b>0006</b> 의 두 심판이 그대로 비용 언어로 번역된 것이다:</p>
+
+<table class="cmp">
+<tr><th>방향</th><th>증상</th><th>0006 과의 연결</th></tr>
+<tr><td><b>과대 예약</b> (requests 너무 큼)</td><td>노드 낭비 · 유휴 예약 · 더 많은 노드 = 돈</td><td>Pending 유발(예약 장부가 참)</td></tr>
+<tr><td><b>과소 예약</b> (requests 너무 작음)</td><td>메모리 부족 시 <code>OOMKilled</code>(Exit 137) · 성능 저하</td><td>0006 의 137, incompressible memory</td></tr>
+<tr><td><b>균형점</b></td><td>실사용 + 여유(headroom) 만큼만 예약</td><td>right-sizing 의 목표</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">누가 균형점을 찾아주나 — VPA</span>
+손으로 맞추기 어려우니 <b>VPA(Vertical Pod Autoscaler, 0012)</b> 가 실사용을 관찰해
+"이 워크로드는 requests 를 250m/300Mi 로 낮추라"고 <b>추천</b>한다. VPA 의 <code>recommendation</code> 모드는
+곧 <b>right-sizing 추천기</b>다 — 과대 예약을 자동으로 찾아준다. HPA 가 <em>Pod 수</em>를 늘려 부하를 받는다면(0012),
+VPA 는 <em>Pod 크기</em>(requests)를 실사용에 맞춰 낭비를 줄인다.
+</div>
+
+<h2>3. 쿠버네티스 비용은 어디서 새나</h2>
+
+<table class="cmp">
+<tr><th>비용 요인</th><th>정체</th><th>이미 배운 것</th></tr>
+<tr><td><b>과대 requests</b></td><td>가장 흔한 낭비 — 유휴 예약이 노드를 늘림</td><td>0006 requests(예약)</td></tr>
+<tr><td><b>유휴 노드</b></td><td>Pod 가 다 빠졌는데 반납 안 된 빈 노드</td><td>0012 Cluster Autoscaler 축소</td></tr>
+<tr><td><b>무한 오토스케일</b></td><td>상한 없는 HPA/노드 스케일 → 폭주하면 비용 폭발</td><td>0012 HPA <code>maxReplicas</code></td></tr>
+<tr><td><b>스토리지(PV)</b></td><td>PVC 를 지워도 남는 볼륨, 과대 프로비전된 디스크</td><td>0011 PV/PVC</td></tr>
+<tr><td><b>네트워크 egress</b></td><td>클러스터 밖·리전 밖으로 나가는 트래픽 요금(보통 청구서의 숨은 항목)</td><td>—</td></tr>
+</table>
+
+<div class="warn">
+<b>egress 는 청구서의 조용한 도둑</b> — 클러스터 <em>안</em> 트래픽은 대개 공짜지만, 리전/AZ 를 넘거나
+인터넷으로 나가는(egress) 데이터엔 GB 당 요금이 붙는다. "왜 청구서에 network 항목이 이렇게 크지?"의
+단골 범인이라, KCNA 수준에선 "egress = 돈이 드는 방향" 정도만 이름표 붙여두면 충분하다.
+</div>
+
+<h2>4. 도구 — OpenCost 와 Kubecost</h2>
+
+<p>비용을 "보이게" 하려면 <b>노드 청구서를 Pod·namespace 단위로 쪼개는(allocation)</b> 도구가 필요하다.
+쿠버네티스 자체는 비용을 모른다 — Pod 가 어느 노드의 얼마짜리 자원을 얼마나 예약/사용했는지 계산해
+클라우드 가격표와 곱해줘야 한다. 그게 이 두 도구다:</p>
+
+<table class="cmp">
+<tr><th>도구</th><th>정체</th><th>포지션</th></tr>
+<tr><td><b>OpenCost</b></td><td>CNCF 프로젝트. <b>벤더 중립 비용 배분 표준</b>(오픈소스)</td><td>Kubecost 가 기증한 오픈 코어. "쿠버네티스 비용의 Prometheus"</td></tr>
+<tr><td><b>Kubecost</b></td><td>OpenCost 위에 UI·리포트·최적화 추천을 얹은 제품(상용 티어 있음)</td><td>OpenCost 를 감싼 완제품</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">OpenCost 가 하는 일 한 줄</span>
+Pod 의 <b>requests(예약)와 실사용</b>을 노드의 클라우드 <b>가격표</b>와 곱해서
+"<code>namespace=payments</code> 가 이번 달 $340" 처럼 <b>라벨·namespace 단위로 비용을 배분</b>한다.
+0014 에서 Prometheus 가 벤더 중립 <em>메트릭</em> 표준이었듯, OpenCost 는 벤더 중립 <em>비용</em> 표준이다 —
+CNCF 우산 아래 있어 특정 클라우드에 묶이지 않는다.
+</div>
+
+<p><b>showback vs chargeback</b> — 비용을 팀에 <em>붙이는</em> 두 방식. KCNA 단골 구분이다:</p>
+
+<table class="cmp">
+<tr><th>방식</th><th>뜻</th><th>비유</th></tr>
+<tr><td><b>Showback</b></td><td>"너희 팀이 이만큼 썼어" — <b>보여주기만</b> 함(정보·인식 목적)</td><td>사용 내역서만 보냄</td></tr>
+<tr><td><b>Chargeback</b></td><td>"너희 팀 예산에서 <b>실제로 차감</b>" — 내부 청구</td><td>진짜 청구서를 발행</td></tr>
+</table>
+
+<h2>5. 오토스케일로 비용 절감 — 0012 를 돈의 언어로</h2>
+
+<p><b>0012</b> 의 오토스케일러들은 성능 도구인 동시에 <b>비용 도구</b>다. 부하가 빠지면 자원을 <em>반납</em>하게 만드는 게 핵심:</p>
+
+<table class="cmp">
+<tr><th>기법</th><th>비용을 어떻게 줄이나</th><th>연결</th></tr>
+<tr><td><b>Cluster Autoscaler 축소</b></td><td>빈 노드를 감지해 <b>반납</b> → 유휴 노드 요금 제거</td><td>0012</td></tr>
+<tr><td><b>Spot / Preemptible 노드</b></td><td>클라우드가 언제든 회수할 수 있는 대신 <b>60~90% 싼</b> 노드. 죽어도 되는 워크로드(stateless, 0014 12-factor)에</td><td>0002 Pod 는 교체 가능</td></tr>
+<tr><td><b>Scale-to-zero</b></td><td>요청 없으면 Pod 를 <b>0개</b>까지 — 안 쓸 땐 공짜</td><td>0017 Knative serverless</td></tr>
+<tr><td><b>VPA right-sizing</b></td><td>requests 를 실사용에 맞춰 노드당 밀도(bin-packing) 개선</td><td>0012</td></tr>
+</table>
+
+<div class="note"><b>HPA vs 비용:</b> HPA(0012)는 부하가 낮을 때 <em>Pod 수를 줄여</em> 노드를 비우고,
+그 빈 노드를 Cluster Autoscaler 가 반납한다 — 둘이 짝을 이뤄야 실제 돈이 준다.
+HPA 만 있고 노드 축소가 없으면 Pod 는 줄어도 노드 값은 계속 나간다.</div>
+
+<h2>6. FinOps 3원칙 — 비용을 문화로</h2>
+
+<p><b>FinOps</b> = Finance + DevOps. 클라우드 비용을 <b>엔지니어·재무·경영이 함께</b> 다루는 문화·실천이다
+(FinOps Foundation 은 CNCF 처럼 Linux Foundation 산하). 세 원칙만 기억하면 된다:</p>
+
+<table class="cmp">
+<tr><th>원칙</th><th>뜻</th><th>이 레슨에서</th></tr>
+<tr><td><b>가시성(Visibility)</b></td><td>먼저 <b>보이게</b> 만든다 — 못 보면 못 고침</td><td>OpenCost 로 namespace 별 비용 배분</td></tr>
+<tr><td><b>최적화(Optimization)</b></td><td>보이면 <b>줄인다</b> — right-sizing, 오토스케일, spot</td><td>2·5절</td></tr>
+<tr><td><b>책임(Accountability)</b></td><td>팀이 자기 비용에 <b>책임</b>진다</td><td>showback / chargeback</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">순서가 핵심</span>
+<b>가시성 → 최적화 → 책임</b>은 순서가 곧 논리다. 보여야(가시성) 줄일 수 있고(최적화),
+누구 것인지 붙여야(책임/showback) 팀이 스스로 줄인다. 이건 0014 의 관측성 루프
+"메트릭으로 감지 → 로그로 원인 → 트레이스로 병목"과 같은 골격 — <b>측정이 먼저</b>다.
+</div>
+
+<h2>7. 관찰 (선택, 2분) — 예약됐지만 유휴를 눈으로</h2>
+
+<p>도구 설치 없이, <b>0006 의 예약 장부</b>를 클러스터에서 직접 본다. <code>describe node</code> 의
+<b>Allocated resources</b> 가 바로 "예약 % (requests 합)"이다:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl describe node | grep -A6 'Allocated resources'</span>
+<span class="out">Allocated resources:
+  Resource   Requests      Limits
+  cpu        <span class="hl">1850m (92%)</span>   3200m (160%)
+  memory     <span class="hl">2400Mi (78%)</span>  4Gi (133%)</span>
+</div>
+
+<p>여기서 <code>92%</code> 는 <b>예약률</b>이다 — 실사용이 아니라 requests 의 합. 이제 <b>실사용</b>과 비교한다:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl top nodes</span>
+<span class="out">NAME             CPU(cores)   CPU%   MEMORY   MEMORY%
+mastery-node-0   <span class="hl">210m</span>         <span class="hl">10%</span>    900Mi    29%      <span class="hl"># 예약 92% vs 실사용 10% !</span></span>
+</div>
+
+<div class="aha">
+<span class="label">이 두 줄이 이 레슨 전부다</span>
+예약(<code>describe node</code>)은 <b>92%</b>인데 실사용(<code>kubectl top</code>)은 <b>10%</b> —
+바로 이 간극이 돈이다. 노드는 "예약 만석"이라 새 Pod 를 못 받아(Pending, 0006) 오토스케일러가
+새 노드를 붙이지만, 물리적으론 90% 가 놀고 있다. <b>이 82%p 의 간극 × 노드 대수 × 인스턴스 시간요금 = 낭비되는 청구서</b>다.
+right-sizing 은 이 간극을 좁히는 일이다.
+</div>
+
+<div class="note">metrics-server 가 없으면 <code>kubectl top</code> 이 "Metrics API not available" 을 낸다 —
+0014 에서 본 그 메시지다. kind 라면 <code>kubectl apply -f https://.../metrics-server</code> 후
+<code>--kubelet-insecure-tls</code> 패치가 필요할 수 있다. 없어도 개념은 <code>describe node</code> 의
+Allocated 만으로 충분히 보인다.</div>
+
+<h2>8. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. 노드의 CPU 실사용률이 10% 인데 클러스터가 계속 새 노드를 띄워 비용이 오른다. 가장 유력한 근본 원인은?</p>
+  <div class="opts">
+    <button class="opt">노드 하드웨어가 노후해 실제 처리량이 낮기 때문</button>
+    <button class="opt" data-correct="true">Pod 들의 requests 가 실사용보다 과하게 잡혀, 예약 장부가 차서 Pending → 오토스케일러가 노드를 추가함</button>
+    <button class="opt">metrics-server 가 실사용을 잘못 보고해 스케줄러가 오판함</button>
+  </div>
+  <div class="explain">0006 복습: 스케줄러는 실사용이 아니라 requests 합으로 판단한다. 과대 requests → bin-packing 악화 → Pending → Cluster Autoscaler 가 노드 추가(0012). 실사용은 10% 여도 예약이 꽉 차 노드 값이 계속 나간다. requests right-sizing 이 근본 해법.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. 팀별로 "이번 달 얼마 썼는지 내역서를 보내되, 실제 예산 차감은 하지 않는" 방식을 뭐라 하나?</p>
+  <div class="opts">
+    <button class="opt" data-correct="true">Showback — 사용량·비용을 보여주기만 함(인식·책임 유도)</button>
+    <button class="opt">Chargeback — 팀 예산에서 실제로 차감(내부 청구)</button>
+    <button class="opt">Right-sizing — requests 를 실사용에 맞춤</button>
+  </div>
+  <div class="explain">showback = 보여주기(청구 없음), chargeback = 진짜 차감(내부 청구). 둘 다 FinOps 3원칙 중 "책임(accountability)"을 구현하는 방식이다. 헷갈리면 "show=보여줌, charge=청구함"으로 어원을 잡으면 된다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. 쿠버네티스 비용을 namespace·label 단위로 배분해주는, CNCF 의 벤더 중립 오픈소스 표준은?</p>
+  <div class="opts">
+    <button class="opt">Prometheus — pull 방식 메트릭 수집기</button>
+    <button class="opt" data-correct="true">OpenCost — requests·실사용을 클라우드 가격표와 곱해 비용을 배분하는 CNCF 표준</button>
+    <button class="opt">VPA — Pod 의 requests 를 자동 조정하는 오토스케일러</button>
+  </div>
+  <div class="explain">OpenCost = 비용의 벤더 중립 표준(Kubecost 가 CNCF 에 기증한 오픈 코어). Prometheus 가 메트릭 표준이듯 OpenCost 는 비용 배분 표준이다. VPA(0012)는 right-sizing 도구로 최적화를 돕지만 비용 배분 자체는 아니다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2·Q3 를 맞히면 KCNA 관측성 도메인의 <b>숨은 항목(비용/FinOps)</b>이 ✅ —
+"requests 가 비용을 좌우한다 · OpenCost · FinOps 3원칙 · showback/chargeback" 이 시험 깊이의 전부다.
+그 이상(실제 OpenCost 배포, spot 노드 운영, 예산 알림)은 심화·실무 몫이니 <b>과투자 금지</b>.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">비용은 개념 여러 개가 얽혀 헷갈리기 쉽다. 궁금한 것만 펼쳐 보면 된다.</p>
+
+<details class="faq">
+<summary>비용이 왜 "관측성" 도메인이에요? 재무 아닌가요?</summary>
+<div class="a"><p>KCNA 는 비용을 <b>Observability(관측성)</b>에 넣는다. 이유는 "측정 없이는 최적화 없다"는 관측성의 핵심 논리가 비용에도 그대로 적용되기 때문이다. 비용은 메트릭·로그·트레이스(0014)와 나란한 <b>또 하나의 신호</b> — 시스템이 얼마짜리인지를 보여준다. 그래서 재무 주제이면서 동시에 "보이게 만드는" 관측성 주제다.</p></div>
+</details>
+
+<details class="faq">
+<summary>requests 를 낮추면 무조건 이득 아닌가요? 왜 균형을 찾아요?</summary>
+<div class="a"><p>너무 낮추면 <b>0006 의 OOMKilled(Exit 137)</b>가 난다. requests 는 메모리 여유를 예약하는 것이기도 해서, 실사용보다 지나치게 낮게 잡으면 부하가 몰릴 때 자원이 부족해 죽거나(메모리) 느려진다(CPU throttling). 그래서 "실사용 + 약간의 여유(headroom)"가 균형점이고, VPA 추천(0012)이 그 지점을 잡아준다. 과대 예약=낭비, 과소 예약=장애.</p></div>
+</details>
+
+<details class="faq">
+<summary>OpenCost 랑 Kubecost, 뭘 알아야 해요?</summary>
+<div class="a"><p>KCNA 는 <b>OpenCost = CNCF 벤더 중립 비용 배분 표준(오픈소스)</b>만 알면 된다. Kubecost 는 그 위에 UI·리포트·추천을 얹은 상용 제품이고, OpenCost 는 Kubecost 가 CNCF 에 기증한 오픈 코어다. 관계만 잡으면 충분 — "OpenCost 는 표준, Kubecost 는 그걸 감싼 완제품".</p></div>
+</details>
+
+<details class="faq">
+<summary>showback 이랑 chargeback, 계속 헷갈려요.</summary>
+<div class="a"><p>어원으로 잡는다. <b>show</b>back = "보여주기"(내역서만 발송, 돈은 안 움직임). <b>charge</b>back = "청구하기"(팀 예산에서 실제 차감). 둘 다 "각 팀이 자기 비용에 책임진다(FinOps 의 accountability)"를 구현하지만, showback 은 인식 유도, chargeback 은 실제 내부 청구다. 조직이 성숙하면 showback → chargeback 으로 넘어가는 경우가 많다.</p></div>
+</details>
+
+<details class="faq">
+<summary>spot / preemptible 노드가 싸면 다 그걸 쓰면 되나요?</summary>
+<div class="a"><p>안 된다 — spot 노드는 클라우드가 <b>언제든 회수(수 분 예고 후)</b>할 수 있다. 그래서 <b>죽어도 되는 워크로드</b>(stateless, 재시작 가능한 배치·워커, 0014 의 12-factor "disposable")에만 적합하다. 데이터베이스처럼 상태를 가진(0011 PV) 워크로드나 항상 떠 있어야 하는 서비스엔 위험하다. "60~90% 싼 대신 언제든 뺏길 수 있음"이 핵심 트레이드오프.</p></div>
+</details>
+
+<details class="faq">
+<summary>scale-to-zero 는 HPA 로 되나요?</summary>
+<div class="a"><p>기본 HPA(0012)는 보통 <code>minReplicas: 1</code> 이라 0 까지 안 내려간다 — 요청을 받을 Pod 가 최소 1개는 떠 있어야 하기 때문이다. <b>진짜 0개</b>까지 내리려면 <b>0017 의 Knative</b>(또는 KEDA) 같은 serverless 계층이 필요하다. 요청이 오면 그때 Pod 를 띄우고(cold start), 없으면 0개 → 안 쓰는 동안 공짜. 트래픽이 뜸한 워크로드의 비용 절감 핵심 기법이다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>kubectl describe node</code> 의 Allocated 가 100% 넘게 나와요(예: limits 160%).</summary>
+<div class="a"><p>정상이다. <b>requests 합은 100% 를 넘을 수 없지만</b>(예약이라서), <b>limits 합은 넘을 수 있다</b> — 모든 Pod 가 동시에 상한까지 쓰진 않는다는 전제로 <b>오버커밋(overcommit)</b>을 허용하기 때문이다(0006 의 두 심판: requests=예약, limits=상한). 비용을 볼 땐 <b>Requests %</b>(예약률)를 봐야 한다. 그게 노드에 얼마나 자리가 잠겼는지를 나타낸다.</p></div>
+</details>
+
+<details class="faq">
+<summary>egress 요금이 뭐예요? 클러스터 안 통신도 돈 드나요?</summary>
+<div class="a"><p>보통 같은 AZ(가용영역) <b>안</b>의 통신은 공짜지만, 다른 AZ·리전으로 넘어가거나 <b>인터넷으로 나가는(egress)</b> 데이터엔 GB 당 요금이 붙는다. 마이크로서비스가 무심코 리전을 넘나들거나 대용량을 외부로 내보내면 청구서의 숨은 큰 항목이 된다. KCNA 수준에선 "egress = 나가는 방향엔 돈이 든다" 정도만 알면 충분하고, 세부 최적화는 실무 몫이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>PV 를 지웠는데 비용이 계속 나와요.</summary>
+<div class="a"><p>PVC/PV 의 <b>reclaim policy</b>가 <code>Retain</code> 이면, PVC 를 지워도 뒤의 실제 클라우드 디스크(볼륨)는 남아 계속 과금된다(0011 PV/PVC). <code>Delete</code> 정책이면 함께 삭제된다. "지웠는데 왜 돈이?"의 단골 원인이 이 orphaned volume 이다 — 비용 도구(OpenCost)가 이런 유휴 스토리지를 찾아주기도 한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>FinOps 를 공부하려면 뭐부터 봐야 해요?</summary>
+<div class="a"><p>KCNA 는 <b>3원칙(가시성·최적화·책임)</b>과 "requests 가 비용을 좌우한다", "OpenCost", "showback/chargeback" 정도면 충분하다 — 그 이상은 자격증 범위 밖이다. 더 깊게 가려면 FinOps Foundation 문서(원전 링크)와 OpenCost 문서를 보되, 실습은 실제 클라우드 클러스터가 있을 때 하는 게 낫다. 지금은 0006 requests 와의 연결만 확실히 잡으면 시험엔 충분하다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://www.opencost.io/docs/">OpenCost 공식 문서</a> — 벤더 중립 비용 배분(cost allocation)의 원전.
+<a href="https://www.finops.org/introduction/what-is-finops/">FinOps Foundation: What is FinOps</a> 로 3원칙(가시성·최적화·책임)을,
+<a href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/">공식 문서: Resource Management</a> 로 requests/limits(비용의 뿌리)를 다시 확인할 수 있다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "OpenCost 를 kind 에 실제로 깔아보려면?", "KEDA 랑 Knative scale-to-zero 차이는?",
+"reserved instance / savings plan 은 FinOps 어디에 들어가나?" — 이 어휘들도 원하면 짧게 붙일 수 있다.
+</div>
+
+<nav class="nav">
+  <a href="0018-cncf-community-governance.html">← 0018 CNCF 거버넌스</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

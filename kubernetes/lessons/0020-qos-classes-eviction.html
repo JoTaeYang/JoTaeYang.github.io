@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0020 — QoS 클래스 &amp; eviction: 누가 먼저 쫓겨나나</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0020 <span class="tag">Fundamentals 심화</span></p>
+<h1>QoS 클래스 &amp; eviction — 누가 먼저 쫓겨나나</h1>
+<p class="subtitle">0006 의 requests/limits 가 Pod 에 <b>등급(QoS)</b>을 매기고, 노드가 쪼들리면 그 등급 순서로 쫓아낸다. "예산 안 낸 Pod 가 먼저 나간다."</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> <b>0006</b> 에서 넣은 requests/limits 만으로 쿠버네티스가 Pod 에 자동으로 붙이는
+세 등급(<code>Guaranteed</code>·<code>Burstable</code>·<code>BestEffort</code>)의 <b>판정 규칙</b>을 손으로 확인하고,
+노드 메모리 압박 때 <b>어느 순서로 쫓겨나는지</b>를 직관으로 새긴다. 덤으로 자주 뒤섞이는
+<b>OOMKill(개별 컨테이너) vs eviction(노드 전체)</b>을 확실히 갈라 둔다.
+</div>
+
+<h2>1. 세 등급은 requests/limits 에서 저절로 나온다</h2>
+
+<p><b>0006</b> 에서 우리는 requests(예약)와 limits(단속)를 넣었다. 그런데 그걸 <b>어떻게</b> 넣었는지에 따라
+쿠버네티스가 Pod 에 <b>QoS 클래스</b>라는 등급을 자동으로 붙인다. 내가 따로 지정하는 필드가 아니라
+<b>requests/limits 조합의 결과로 계산되는</b> 값이라는 게 핵심이다.</p>
+
+<table class="cmp">
+<tr><th>QoS 클래스</th><th>판정 조건 (Pod 안 모든 컨테이너 기준)</th><th>한 줄 직관</th></tr>
+<tr>
+  <td><b>Guaranteed</b></td>
+  <td><b>모든</b> 컨테이너가 <b>cpu·memory 둘 다</b> requests 와 limits 를 설정했고, 각각 <b>requests == limits</b> (값이 정확히 같음)</td>
+  <td>"예산을 딱 못박아 완납" — 가장 안전</td>
+</tr>
+<tr>
+  <td><b>Burstable</b></td>
+  <td>Guaranteed 는 아니지만, <b>최소 한 컨테이너</b>가 cpu 또는 memory 의 request 나 limit 을 <b>하나라도</b> 설정</td>
+  <td>"일부라도 예약함" — 중간</td>
+</tr>
+<tr>
+  <td><b>BestEffort</b></td>
+  <td><b>어떤</b> 컨테이너도 requests/limits 를 <b>하나도</b> 설정 안 함</td>
+  <td>"예산 0" — 가장 먼저 희생</td>
+</tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — 판정은 위에서 아래로</span>
+순서대로 걸러진다: 먼저 <b>모두 requests==limits (cpu·memory 다)</b>면 Guaranteed. 아니면서 <b>뭐라도 하나 설정</b>했으면 Burstable.
+정말 <b>아무것도 없으면</b> BestEffort. 그래서 "limits 만 넣어도" 쿠버네티스가 requests 를 같은 값으로 채우니
+(0006 에서 본 그 자동 채움) Guaranteed 가 될 수 있다. 반대로 memory 만 requests==limits 이고 cpu 는 비었으면
+Guaranteed 가 아니라 <b>Burstable</b> — "둘 다, 모든 컨테이너"라는 <em>and</em> 조건을 놓치기 쉽다.
+</div>
+
+<div class="note"><b>0006 과 이어짐:</b> requests 는 스케줄러가 배치 시점에 보는 <b>예약</b>, limits 는 kubelet/커널이 실행 내내 보는 <b>상한</b>이었다.
+QoS 클래스는 이 두 숫자를 <b>어떻게 조합했느냐</b>를 요약한 라벨일 뿐 — 새 개념이 아니라 0006 의 파생물이다.</div>
+
+<h2>2. 노드가 쪼들리면 — eviction 순서</h2>
+
+<p>노드의 <b>메모리가 압박(memory pressure)</b>받으면 kubelet 은 노드를 지키려고 Pod 를 <b>쫓아낸다(evict)</b>.
+이때 순서가 바로 QoS 클래스다. 예산 장부의 직관 그대로 — <b>예산을 안 낸 Pod 가 먼저 나간다.</b></p>
+
+<table class="cmp">
+<tr><th>쫓겨나는 순서</th><th>대상</th><th>왜</th></tr>
+<tr><td><b>1순위 (먼저)</b></td><td><b>BestEffort</b></td><td>예약이 0 — 잃을 게 없는 셈, 가장 먼저 희생</td></tr>
+<tr><td><b>2순위</b></td><td><b>Burstable</b> 중 자기 memory <b>request 를 초과</b>해 쓰는 것부터</td><td>"예약한 것보다 더 쓰고 있는" Pod 가 먼저</td></tr>
+<tr><td><b>3순위 (마지막)</b></td><td><b>Guaranteed</b></td><td>예약=상한으로 딱 맞게 산다 — 노드가 정말 못 버틸 때만</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">직관 한 줄</span>
+"<b>예산을 안 낸 Pod 가 먼저 쫓겨난다.</b>" BestEffort(예산 0) → 예약보다 초과 사용 중인 Burstable → Guaranteed(완납) 순.
+스케줄러가 <b>0006</b> 의 requests 로 <em>배치</em>를 결정했듯, kubelet 은 같은 requests 를 기준으로 <em>퇴거</em>를 결정한다.
+같은 장부, 다른 심판.
+</div>
+
+<div class="note"><b>0012 와의 차이:</b> 0012 의 taint/affinity 는 "이 Pod 를 <b>어느 노드에 놓을까</b>"라는 <b>배치</b> 규칙이었다.
+eviction 은 이미 놓인 Pod 를 노드가 <b>내보내는</b> 것 — 반대 방향이다. 쫓겨난 Pod 는 (컨트롤러가 관리한다면) 다시 스케줄되어
+taint/affinity 규칙을 <b>또</b> 통과해야 한다. 그리고 <b>0002</b> 에서 배운 대로 Pod 는 ephemeral — evict 는 그 무상함이 노드 레벨에서 발동하는 한 가지 경우다.</div>
+
+<h2>3. OOMKill 과 eviction 은 다른 사건이다</h2>
+
+<p>둘 다 "Pod 가 메모리 때문에 죽거나 사라진다"라서 뭉뚱그리기 쉽지만, <b>층이 다르다.</b>
+<b>0006</b> 의 <code>Exit Code 137</code> 은 OOMKill 쪽이었다.</p>
+
+<table class="cmp">
+<tr><th></th><th>OOMKill</th><th>eviction</th></tr>
+<tr>
+  <td><b>누가</b></td>
+  <td>리눅스 <b>커널</b> (OOM killer)</td>
+  <td>노드의 <b>kubelet</b></td>
+</tr>
+<tr>
+  <td><b>무엇 때문에</b></td>
+  <td>그 <b>컨테이너 하나</b>가 자기 <code>memory limit</code> 초과</td>
+  <td><b>노드 전체</b>가 메모리 부족(pressure)</td>
+</tr>
+<tr>
+  <td><b>범위</b></td>
+  <td>개별 컨테이너 (개별)</td>
+  <td>노드 위 Pod 들 (노드 레벨)</td>
+</tr>
+<tr>
+  <td><b>신호/상태</b></td>
+  <td><code>Exit Code 137</code>, Reason <code>OOMKilled</code></td>
+  <td>Pod status <code>Evicted</code> (describe/events)</td>
+</tr>
+<tr>
+  <td><b>순서 기준</b></td>
+  <td>없음 — 넘긴 그 컨테이너가 죽음</td>
+  <td><b>QoS 클래스</b> (BestEffort 먼저)</td>
+</tr>
+</table>
+
+<div class="warn">
+<b>가장 흔한 혼동:</b> "메모리 부족이면 QoS 낮은 게 먼저 죽는다"는 <b>eviction</b>에만 맞는 말이다.
+<code>OOMKilled(137)</code> 은 QoS 와 무관하게 <b>자기 limit 을 넘긴 바로 그 컨테이너</b>가 죽는다 — Guaranteed 여도 자기 상한을 넘기면 OOMKill 된다.
+"limit 초과 = 개별 처형(OOMKill), 노드 부족 = QoS 순 퇴거(eviction)"로 갈라서 기억하라.
+</div>
+
+<h2>4. Hands-on — 세 등급을 눈으로 확인 (kind <code>mastery</code>)</h2>
+
+<div class="note">kind 클러스터 <code>mastery</code> 이어서 사용. <b>0006</b> 처럼 <code>lab</code> namespace 에서 격리해 실습한다.
+kubectl 버전마다 <code>run</code> 의 리소스 플래그가 다를 수 있으니, <b>안전하게 매니페스트 YAML 을 apply</b> 하는 방식으로 간다.</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl create namespace lab 2&gt;/dev/null; kubectl config set-context --current --namespace=lab</span>
+</div>
+
+<p><b>세 Pod 를 한 매니페스트로.</b> <code>qos.yaml</code> — 각 Pod 의 requests/limits 만 다르게 했다:</p>
+
+<div class="cluster"><span class="ctx">qos.yaml</span>
+<span class="out">apiVersion: v1
+kind: Pod
+metadata:
+  name: g-pod            <span class="hl"># Guaranteed 노리기</span>
+spec:
+  containers:
+  - name: app
+    image: nginx:1.27
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "64Mi"
+      limits:
+        cpu: "100m"      <span class="hl"># cpu·memory 둘 다 requests==limits</span>
+        memory: "64Mi"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: b-pod            <span class="hl"># Burstable 노리기</span>
+spec:
+  containers:
+  - name: app
+    image: nginx:1.27
+    resources:
+      requests:
+        memory: "64Mi"   <span class="hl"># request 만, limit 은 비움 → Guaranteed 조건 미달</span>
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: e-pod            <span class="hl"># BestEffort 노리기</span>
+spec:
+  containers:
+  - name: app
+    image: nginx:1.27    <span class="hl"># resources 아예 없음</span></span>
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f qos.yaml</span>
+<span class="out">pod/g-pod created
+pod/b-pod created
+pod/e-pod created</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pod g-pod -o jsonpath='{.status.qosClass}{"\n"}'</span>
+<span class="out"><span class="hl">Guaranteed</span></span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pod b-pod -o jsonpath='{.status.qosClass}{"\n"}'</span>
+<span class="out"><span class="hl">Burstable</span></span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pod e-pod -o jsonpath='{.status.qosClass}{"\n"}'</span>
+<span class="out"><span class="hl">BestEffort</span></span>
+</div>
+
+<p><b>한 번에 셋 다 보기</b> — 판정이 requests/limits 에서 나온 게 눈에 보인다:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pods -o custom-columns='NAME:.metadata.name,QOS:.status.qosClass'</span>
+<span class="out">NAME    QOS
+b-pod   Burstable
+e-pod   BestEffort
+g-pod   <span class="hl">Guaranteed</span></span>
+</div>
+
+<div class="aha">
+<span class="label">직접 확인해 볼 것</span>
+<code>b-pod</code> 에서 memory 를 <code>requests==limits</code> 로 맞추되 <b>cpu 를 안 넣으면</b> 여전히 <code>Guaranteed</code> 가 <b>아니다</b> —
+"cpu·memory 둘 다, 모든 컨테이너"라는 조건을 몸으로 확인하는 순간이다. 고쳐서 다시 apply 하고 jsonpath 로 등급이 바뀌는지 보라.
+(Pod 는 immutable 필드가 있어 resources 변경엔 delete 후 재생성이 편하다 — <b>0002</b> 의 ephemeral 성질 그대로.)
+</div>
+
+<p>정리: <code>kubectl delete ns lab &amp;&amp; kubectl config set-context --current --namespace=default</code>.</p>
+
+<div class="note"><b>심화 한 줄:</b> eviction 순서를 QoS 위에서 더 세밀하게 조절하고 싶으면 <b>PriorityClass</b>(Pod 우선순위)와 <b>preemption</b>(높은 우선순위 Pod 가 낮은 걸 밀어내고 자리 차지)이 있다.
+KCNA 범위 밖 — 여기선 "그런 게 있다"까지만. 시험엔 <b>3 클래스·판정 규칙·eviction 우선순위</b> 세 가지면 충분하다.</div>
+
+<h2>5. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. 한 Pod 의 유일한 컨테이너가 <code>memory: requests==limits==128Mi</code> 인데 <b>cpu 는 아무것도 설정 안 함</b>이다. QoS 클래스는?</p>
+  <div class="opts">
+    <button class="opt">Guaranteed — memory 가 requests==limits 이므로</button>
+    <button class="opt" data-correct="true">Burstable — cpu 가 비어 "둘 다 requests==limits" 조건을 못 채움</button>
+    <button class="opt">BestEffort — 완전한 세트가 아니므로 예약 없음으로 취급</button>
+  </div>
+  <div class="explain">Guaranteed 는 <b>모든 컨테이너가 cpu·memory 둘 다</b> requests==limits 여야 한다. cpu 가 비면 그 <em>and</em> 조건이 깨져 Burstable 로 떨어진다. 뭐라도 하나 설정했으니 BestEffort 도 아니다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. 노드가 memory pressure 에 빠졌다. kubelet 이 <b>가장 먼저</b> 쫓아내는(evict) Pod 는?</p>
+  <div class="opts">
+    <button class="opt">Guaranteed — 예약=상한이라 회수 여지가 가장 크다</button>
+    <button class="opt">requests 이하로만 쓰고 있는 Burstable</button>
+    <button class="opt" data-correct="true">BestEffort — requests/limits 가 하나도 없어 예산이 0 이다</button>
+  </div>
+  <div class="explain">순서: BestEffort → (request 초과 사용 중인) Burstable → Guaranteed. "예산 안 낸 Pod 가 먼저 나간다." Guaranteed 는 마지막, 노드가 정말 못 버틸 때만이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0006 복습) <code>Guaranteed</code> Pod 의 컨테이너가 자기 <code>memory limit</code> 을 넘겼다. 무슨 일이 일어나나?</p>
+  <div class="opts">
+    <button class="opt">아무 일도 없다 — Guaranteed 는 eviction 대상이 아니므로 보호된다</button>
+    <button class="opt" data-correct="true">그 컨테이너가 <code>OOMKilled(Exit 137)</code> 된다 — limit 초과는 QoS 와 무관한 개별 처형이다</button>
+    <button class="opt">노드의 다른 BestEffort Pod 가 대신 evict 된다</button>
+  </div>
+  <div class="explain">간격 반복: OOMKill 은 <b>커널이, limit 넘긴 그 컨테이너 하나</b>를 죽이는 것(0006 의 137)이라 QoS 등급과 무관하다. QoS 순서는 <b>노드 전체</b> memory pressure 때의 <b>eviction</b>에만 적용된다. 둘은 다른 층이다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2·Q3 를 맞히면 QoS 3 클래스의 <b>판정 규칙</b>, eviction <b>우선순위</b>, 그리고 OOMKill vs eviction 의 <b>층 구분</b>이 ✅ —
+0006 자원 관리의 마지막 조각이 채워졌다. 이걸로 "Pending·OOMKilled·Evicted" 세 실패 모드를 각각 다른 심판에 정확히 귀속시킬 수 있다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">QoS 는 "내가 넣는 값"이 아니라 "계산되어 나오는 라벨"이라 헷갈리기 쉽다. 궁금한 것만 펼쳐 보면 된다.</p>
+
+<details class="faq">
+<summary>QoS 클래스를 내가 직접 지정할 수 있나요?</summary>
+<div class="a"><p>없다. <code>qosClass</code> 는 <b>읽기 전용</b> — 내가 넣은 requests/limits 조합을 보고 쿠버네티스가 <b>계산해서</b> <code>.status.qosClass</code> 에 채운다. 등급을 바꾸고 싶으면 requests/limits 를 바꾸는 수밖에 없다. 그래서 이 레슨은 "QoS 필드를 배우는" 게 아니라 "0006 의 두 숫자가 등급으로 어떻게 번역되나"를 배우는 것이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Guaranteed 가 되려면 왜 <b>cpu 도</b> requests==limits 여야 하나요?</summary>
+<div class="a"><p>Guaranteed 의 정의가 "모든 컨테이너의 <b>cpu·memory 둘 다</b> requests==limits"이기 때문이다. memory 만 딱 맞고 cpu 를 비우면 그 컨테이너는 cpu 를 "얼마든 burst" 할 수 있어 <b>Burstable</b> 성격이 남는다. 그래서 쿠버네티스는 이 경우를 Guaranteed 로 인정하지 않는다. 실습의 <code>b-pod</code> 로 직접 확인할 수 있다.</p></div>
+</details>
+
+<details class="faq">
+<summary>limits 만 넣고 requests 를 안 넣으면 QoS 가 뭐가 되나요?</summary>
+<div class="a"><p><b>0006</b> 에서 봤듯 limits 만 넣으면 쿠버네티스가 requests 를 <b>같은 값으로 자동 채운다</b>. 그래서 cpu·memory <b>둘 다</b> limits 를 넣었다면 requests==limits 가 되어 <b>Guaranteed</b> 가 된다. 한쪽만 넣었다면 나머지는 여전히 비어 <b>Burstable</b> 이다. "자동 채움"을 기억하면 예측이 쉽다.</p></div>
+</details>
+
+<details class="faq">
+<summary>OOMKill 이랑 eviction, 결국 둘 다 죽는 거 아닌가요?</summary>
+<div class="a"><p>결과는 비슷해 보여도 <b>원인·주체·범위</b>가 다르다. OOMKill 은 <b>커널</b>이 <b>limit 넘긴 컨테이너 하나</b>를 죽이는 것(개별, Exit 137). eviction 은 <b>kubelet</b>이 <b>노드 전체 메모리 부족</b> 때 QoS 순서로 <b>Pod 를 내보내는</b> 것(노드 레벨, status=Evicted). "limit 초과냐, 노드 부족이냐"로 원인을 가르면 안 헷갈린다.</p></div>
+</details>
+
+<details class="faq">
+<summary>evict 된 Pod 는 어떻게 되나요? 사라지고 끝인가요?</summary>
+<div class="a"><p>Pod 자체는 <code>Evicted</code> 상태로 남고 컨테이너는 종료된다. 그 Pod 를 <b>Deployment/ReplicaSet 이 관리</b>한다면(<b>0002</b>) 컨트롤러가 대체 Pod 를 새로 만들어 <b>다른 노드에 다시 스케줄</b>한다 — 이때 <b>0012</b> 의 taint/affinity·requests 를 또 통과해야 한다. 반면 단독 Pod(관리자 없음)면 그냥 Evicted 로 남는다. Pod 는 ephemeral 하다는 0002 의 명제 그대로다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Burstable 중에서도 "request 초과 사용"이 먼저 쫓겨난다는 게 무슨 뜻이에요?</summary>
+<div class="a"><p>kubelet 은 Burstable Pod 들 사이에선 "예약한 memory request 보다 <b>얼마나 더</b> 쓰고 있나"를 본다. request 이하로 얌전히 쓰는 Pod 보다, request 를 넘겨 <b>초과 사용 중인</b> Pod 를 먼저 내보낸다 — "예약한 만큼만 쓴 Pod 는 덜 미안하다"는 직관이다. KCNA 는 "BestEffort → Burstable → Guaranteed" 큰 순서면 충분하고, 이 세부는 감으로만 잡아도 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>kubectl get pod ... -o jsonpath='{.status.qosClass}'</code> 가 빈 값이면요?</summary>
+<div class="a"><p>Pod 가 아직 스케줄/생성 초기라 <code>status</code> 가 덜 채워졌을 수 있다. 잠깐 뒤 다시 조회하거나 <code>kubectl describe pod &lt;name&gt;</code> 의 <code>QoS Class:</code> 줄로 확인하면 된다. describe 는 <b>0004·0006</b> 에서처럼 언제나 든든한 진단 창구다.</p></div>
+</details>
+
+<details class="faq">
+<summary>실무에선 뭘 목표로 해야 하나요? 다 Guaranteed 로?</summary>
+<div class="a"><p>중요한(핵심 경로) 워크로드는 <b>Guaranteed</b> 로 두어 eviction 에서 마지막까지 살아남게 하는 게 안전하다. 다만 requests==limits 는 <b>0006</b> 의 예약 장부를 그만큼 크게 잡는 것이라 스케줄 여유를 먹는다. 배치성·비핵심 작업은 Burstable/BestEffort 로 두어 자원을 탄력적으로 쓴다. "중요할수록 Guaranteed, 유연할수록 Burstable" 정도의 감이면 KCNA 엔 충분.</p></div>
+</details>
+
+<details class="faq">
+<summary>PriorityClass 는 QoS 랑 뭐가 다른가요?</summary>
+<div class="a"><p>둘 다 "누가 살아남나"를 다루지만 축이 다르다. <b>QoS</b> 는 requests/limits 에서 <b>자동 계산</b>되어 주로 <b>eviction 순서</b>에 쓰인다. <b>PriorityClass</b> 는 내가 <b>명시</b>하는 우선순위로, 스케줄 자리가 없을 때 낮은 Pod 를 밀어내는 <b>preemption</b>에 쓰인다. KCNA 는 QoS 3 클래스와 eviction 순서까지가 범위 — PriorityClass 는 "존재만" 알면 된다(CKA 심화).</p></div>
+</details>
+
+<details class="faq">
+<summary>eviction 은 memory 부족일 때만 일어나나요?</summary>
+<div class="a"><p>이 레슨의 초점은 <b>memory pressure</b>(가장 자주, 그리고 QoS 순서가 뚜렷하게 적용되는 경우)다. 실제로 kubelet 은 디스크(ephemeral-storage) 부족 같은 다른 압박에도 Pod 를 evict 할 수 있지만, KCNA 는 "노드 자원 부족 시 QoS 낮은 순으로"라는 핵심 골격이면 충분하다. 세부 임계값·신호 종류는 CKA 몫이다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/">공식 문서: Pod Quality of Service Classes</a> —
+Guaranteed/Burstable/BestEffort 판정 규칙의 원전.
+<a href="https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/">Node-pressure Eviction</a> 에서 memory pressure 시 QoS 순 퇴거를,
+<a href="https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/">Resource Management for Pods and Containers</a>(0006 의 원전)에서 requests/limits 를 다시 확인할 수 있다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "Evicted Pod 를 어떻게 청소하나?", "PriorityClass 로 preemption 은 어떻게 도나?",
+"디스크 부족 eviction 은 QoS 를 어떻게 보나?" — 전부 CKA 로 가는 좋은 다음 재료다.
+</div>
+
+<nav class="nav">
+  <a href="0019-cost-management-finops.html">← 0019 비용 관리</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

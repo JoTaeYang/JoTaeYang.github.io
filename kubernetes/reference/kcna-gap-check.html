@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KCNA 갭 체크 — Kubernetes Mastery</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Reference · Level 1</p>
+<h1>KCNA 갭 체크</h1>
+<p class="subtitle">공식 커리큘럼 도메인 대비 — 커버한 것, 부분인 것, 아직 안 본 것. 시험 준비의 지도.</p>
+
+<div class="note">
+KCNA 는 90분 객관식(온라인 감독) 시험이다. 정확한 문항 수/비용/정책은
+<a href="https://www.cncf.io/training/certification/kcna/">공식 페이지</a>와
+<a href="https://github.com/cncf/curriculum">커리큘럼 저장소</a>에서 응시 직전에 재확인한다 (도메인 비중도 개정될 수 있다).
+</div>
+
+<h2>도메인별 현황</h2>
+
+<p>범례: <b style="color:var(--good)">✅ 커버</b> (레슨/실습 증거 있음) ·
+<b style="color:var(--warn)">🔶 부분</b> (인접 트랙 또는 개념만) ·
+<b>⬜ 미학습</b></p>
+
+<h3>1. Kubernetes Fundamentals (비중 최대 — ~46%)</h3>
+<table class="cmp">
+<tr><th>주제</th><th>상태</th><th>근거 / 다음 행동</th></tr>
+<tr><td>Pod, 컨테이너, 선언적 모델</td><td>✅</td><td><a href="../lessons/0001-placement-diagnostic.html">0001</a>, <a href="../lessons/0002-deployment-ownership-chain.html">0002</a></td></tr>
+<tr><td>Deployment / ReplicaSet / 롤링 업데이트</td><td>✅</td><td><a href="../lessons/0002-deployment-ownership-chain.html">0002</a> + 복습 재시험 통과</td></tr>
+<tr><td>Service / EndpointSlice / DNS</td><td>✅</td><td><a href="../lessons/0003-service-and-endpoints.html">0003</a></td></tr>
+<tr><td>probe (liveness/readiness/startup)</td><td>✅</td><td><a href="../lessons/0004-probes.html">0004</a> (startupProbe 는 문서 참조로만)</td></tr>
+<tr><td>ConfigMap / Secret</td><td>✅</td><td><a href="../lessons/0005-configmap-and-secret.html">0005</a></td></tr>
+<tr><td>requests/limits, 스케줄링, namespace</td><td>✅</td><td><a href="../lessons/0006-requests-limits-scheduling.html">0006</a></td></tr>
+<tr><td>아키텍처 컴포넌트 (API server, etcd, scheduler, kubelet…)</td><td>✅</td><td><a href="../lessons/0007-architecture-rbac-verification.html">0007</a> 검증 통과 (제어 루프가 도는 곳 = kube-controller-manager 만 재확인 대상 → 0008 복습에 포함)</td></tr>
+<tr><td>기타 워크로드: StatefulSet, DaemonSet, Job, CronJob</td><td>✅</td><td><a href="../lessons/0009-workload-family.html">0009</a> — "언제 Deployment 가 아닌가" (Job 완료 + StatefulSet 안정 신원 실습)</td></tr>
+<tr><td>NodePort / LoadBalancer / Ingress</td><td>✅</td><td><a href="../lessons/0010-external-exposure.html">0010</a> — ClusterIP(0003) 위에 3단으로 얹기 (NodePort 실습 + LB/Ingress 개념)</td></tr>
+<tr><td>PV / PVC / StorageClass</td><td>✅</td><td><a href="../lessons/0011-storage-pv-pvc.html">0011</a> — PVC=요청/PV=공급/SC=공장, 동적 프로비저닝 + Pod 죽어도 파일 유지 실습</td></tr>
+<tr><td>RBAC, ServiceAccount</td><td>✅</td><td><a href="../lessons/0008-rbac-hands-on.html">0008</a> 실습 통과 — <code>auth can-i</code> 거부→부여→경계를 손으로 확인 (CKA/CKS 재활용)</td></tr>
+<tr><td>QoS 클래스 & eviction (심화)</td><td>✅</td><td><a href="../lessons/0020-qos-classes-eviction.html">0020</a> 실습 — Guaranteed/Burstable/BestEffort 판정 + 축출 순서, 0006 OOMKill(137)과 구분</td></tr>
+<tr><td>ResourceQuota / LimitRange / Namespace 격리 (심화)</td><td>✅</td><td><a href="../lessons/0022-resourcequota-limitrange-namespace.html">0022</a> 실습 — namespace 총량 예산 + 기본값 주입, namespace≠네트워크 격리 교정</td></tr>
+<tr><td>API 확장: CRD / Operator (심화)</td><td>✅</td><td><a href="../lessons/0021-operators-crd.html">0021</a> 실습 — CRD 로 API 확장, Operator=CRD+컨트롤러=0007 제어 루프의 day-2 자동화</td></tr>
+</table>
+
+<h3>2. Container Orchestration (~22%)</h3>
+<table class="cmp">
+<tr><th>주제</th><th>상태</th><th>근거 / 다음 행동</th></tr>
+<tr><td>컨테이너 런타임, CRI, containerd vs Docker</td><td>✅</td><td><a href="../lessons/0012-interfaces-cri-cni-csi.html">0012</a> — 내 클러스터의 CONTAINER-RUNTIME=containerd 직접 확인</td></tr>
+<tr><td>CNI (네트워크 플러그인), CSI (스토리지 인터페이스)</td><td>✅</td><td><a href="../lessons/0012-interfaces-cri-cni-csi.html">0012</a> — 인터페이스 3형제로 묶어, 이미 쓴 것(Pod IP/0003, SC/0011)의 밑단 명명</td></tr>
+<tr><td>스케줄링 심화 (taint/toleration, affinity — 개념 수준)</td><td>✅</td><td><a href="../lessons/0012-interfaces-cri-cni-csi.html">0012</a> 부록 어휘 (개념 수준)</td></tr>
+<tr><td>Autoscaling (HPA/VPA/Cluster Autoscaler — 개념)</td><td>✅</td><td><a href="../lessons/0012-interfaces-cri-cni-csi.html">0012</a> 부록 어휘 (개념 수준)</td></tr>
+<tr><td>Service Mesh (사이드카, mTLS, 트래픽 관리 — 심화)</td><td>✅</td><td><a href="../lessons/0016-service-mesh.html">0016</a> — data/control plane, 자동 mTLS, L7(0013 kube-proxy L4 대비), Istio/Linkerd</td></tr>
+<tr><td>보안 기초 (4C, RBAC 개념)</td><td>🔶</td><td>Level 2(KCSA)에서 본격화 — NetworkPolicy 씨앗은 <a href="../lessons/0013-pod-vs-service-network.html">0013</a>·<a href="../lessons/0022-resourcequota-limitrange-namespace.html">0022</a>(namespace≠격리)에 뿌려둠</td></tr>
+</table>
+
+<h3>3. Cloud Native Architecture (~16%)</h3>
+<table class="cmp">
+<tr><th>주제</th><th>상태</th><th>근거 / 다음 행동</th></tr>
+<tr><td>CNCF 생태계, 프로젝트 성숙도(sandbox/incubating/graduated)</td><td>✅</td><td><a href="../lessons/0014-cloud-native-vocabulary.html">0014</a> — Sandbox→Incubating→Graduated 순서·의미 (어휘 수준)</td></tr>
+<tr><td>12-factor, 마이크로서비스 vs 모놀리스</td><td>✅</td><td><a href="../lessons/0014-cloud-native-vocabulary.html">0014</a> — 12-factor 를 0005(설정)/0002(disposable)/0011(상태 밖) 과 연결</td></tr>
+<tr><td>Serverless (Knative, scale-to-zero — 심화)</td><td>✅</td><td><a href="../lessons/0017-serverless-knative.html">0017</a> — scale-to-zero·cold start·event-driven, HPA(min≥1)와 대비</td></tr>
+<tr><td>오픈 표준 (OCI)</td><td>✅</td><td><a href="../lessons/0014-cloud-native-vocabulary.html">0014</a> — OCI = 0012 의 "Docker 지워도 이미지는 그대로" 표준</td></tr>
+<tr><td>CNCF 커뮤니티·거버넌스·페르소나 (심화)</td><td>✅</td><td><a href="../lessons/0018-cncf-community-governance.html">0018</a> — Governing Board vs TOC, 오픈 거버넌스, 역할/페르소나</td></tr>
+</table>
+
+<h3>4. Cloud Native Observability (~8%)</h3>
+<table class="cmp">
+<tr><th>주제</th><th>상태</th><th>근거 / 다음 행동</th></tr>
+<tr><td>메트릭/로그/트레이스 3기둥, Prometheus 개념</td><td>✅</td><td><a href="../lessons/0014-cloud-native-vocabulary.html">0014</a> — 숫자/문장/지도로 구분, Prometheus=pull (어휘 수준)</td></tr>
+<tr><td>kubectl 디버깅 (logs/describe/events)</td><td>✅</td><td>0004, 0006 에서 실습으로 체득</td></tr>
+<tr><td>Cost Management / FinOps (심화)</td><td>✅</td><td><a href="../lessons/0019-cost-management-finops.html">0019</a> — requests(0006)=비용 레버, OpenCost, showback/chargeback (놓치기 쉬운 관측성 항목)</td></tr>
+</table>
+
+<h3>5. Cloud Native Application Delivery (~8%)</h3>
+<table class="cmp">
+<tr><th>주제</th><th>상태</th><th>근거 / 다음 행동</th></tr>
+<tr><td>GitOps (ArgoCD/Flux — 개념), CI/CD</td><td>✅</td><td><a href="../lessons/0014-cloud-native-vocabulary.html">0014</a> — GitOps = 0007 제어 루프의 desired state 를 Git 으로 (pull/drift 교정)</td></tr>
+<tr><td>Helm (패키지 매니저 — 개념)</td><td>✅</td><td><a href="../lessons/0014-cloud-native-vocabulary.html">0014</a> — chart/values/release (어휘 수준)</td></tr>
+</table>
+
+<h3>기초 메커니즘 딥다이브 (KCNA 인접 — 이미 배운 것의 진짜 엔진)</h3>
+<p class="note">시험 밖이라기보다 여러 레슨에 파편으로 흩어져 하나의 그림이 안 되던 밑바닥 메커니즘. 0023~0028 로 한 장씩 굳혀 CKAD/CKA 로 이월.</p>
+<table class="cmp">
+<tr><th>주제</th><th>상태</th><th>근거 / 다음 행동</th></tr>
+<tr><td>Pod 생명주기 상태 머신 (phase·컨테이너 상태·restartPolicy)</td><td>✅</td><td><a href="../lessons/0023-pod-lifecycle-states.html">0023</a> — Pending/Running/Succeeded/Failed vs Waiting/Running/Terminated vs Always/OnFailure/Never, 0004·0006·0009 파편 통합</td></tr>
+<tr><td>우아한 종료 (SIGTERM→grace→SIGKILL, preStop/postStart)</td><td>✅</td><td><a href="../lessons/0024-graceful-termination.html">0024</a> — terminationGracePeriodSeconds(기본 30s), 0002 롤링업데이트의 뒷면</td></tr>
+<tr><td>Init 컨테이너 & 네이티브 사이드카 (시작 순서)</td><td>✅</td><td><a href="../lessons/0025-init-containers-sidecars.html">0025</a> — 순서 보장 + 1.28+ 사이드카(restartPolicy:Always initContainer), 0016 메시 밑개념</td></tr>
+<tr><td>ownerReferences · GC · finalizer</td><td>✅</td><td><a href="../lessons/0026-owner-references-gc-finalizers.html">0026</a> — cascade 삭제 메커니즘 + finalizer, 0002 소유 체인의 진짜 엔진</td></tr>
+<tr><td>API 그룹·버전·deprecation</td><td>✅</td><td><a href="../lessons/0027-api-groups-versions.html">0027</a> — apps/v1 이 왜 그렇게 생겼나, 그룹/버전/deprecation 정책 리터러시</td></tr>
+<tr><td>Static Pod (컨트롤 플레인 부팅)</td><td>✅</td><td><a href="../lessons/0028-static-pods.html">0028</a> — kubelet 이 /etc/kubernetes/manifests 로 mirror pod 생성, 0007 의 다음 층</td></tr>
+</table>
+
+<h2>남은 레슨 계획 (제안)</h2>
+<ol>
+  <li><s>아키텍처 + RBAC 검증 퀴즈</s> — <a href="../lessons/0007-architecture-rbac-verification.html">0007</a> 완료. 아키텍처 ✅, RBAC 은 회상이 흔들려 실습으로 이월.</li>
+  <li><s>RBAC 실습</s> — <a href="../lessons/0008-rbac-hands-on.html">0008</a> 완료. <code>auth can-i</code> 거부→부여→경계 통과 → RBAC ✅.</li>
+  <li><s>워크로드 4형제</s> — <a href="../lessons/0009-workload-family.html">0009</a> 완료. "언제 Deployment 가 아닌가" (Job 완료 + StatefulSet 안정 신원 실습).</li>
+  <li><s>외부 노출 3단</s> — <a href="../lessons/0010-external-exposure.html">0010</a> 완료. NodePort → LoadBalancer → Ingress, ClusterIP 위에 3단으로.</li>
+  <li><s>스토리지</s> — <a href="../lessons/0011-storage-pv-pvc.html">0011</a> 완료. PV / PVC / StorageClass, 동적 프로비저닝 + 영속성 실습.</li>
+  <li><s>인터페이스 3형제 + 오케스트레이션 어휘</s> — <a href="../lessons/0012-interfaces-cri-cni-csi.html">0012</a> 완료. CRI / CNI / CSI, taint/affinity/HPA 개념.</li>
+  <li><s>클라우드 네이티브 어휘 일괄</s> — <a href="../lessons/0014-cloud-native-vocabulary.html">0014</a> 완료. CNCF 성숙도 / 12-factor / 관측성 3기둥 / GitOps / Helm → 저비중 세 도메인 어휘 ✅.</li>
+  <li><b>모의 진단</b> — <a href="../lessons/0015-kcna-mock-diagnostic.html">0015</a> 준비 완료. 18문항 전 도메인 → 결과로 최종 갭 확인 후 응시 일정 확정.</li>
+</ol>
+
+<div class="aha">
+<span class="label">전략</span>
+비중이 낮은 도메인(관측성 8%, 딜리버리 8%)은 어휘 수준에서 멈춘다 — 과투자는 낭비다.
+반대로 Fundamentals(46%)의 ⬜ 항목(워크로드 4형제, 노출, 스토리지)은 실습으로 확실히.
+어차피 전부 CKAD/CKA 에서 다시 깊게 만나므로, 여기서의 실습은 이자까지 붙는 투자다.
+</div>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://github.com/cncf/curriculum">github.com/cncf/curriculum</a> — KCNA_Curriculum.pdf 가 시험 범위의 원전.
+이 갭 체크의 도메인/비중이 최신인지 응시 전 반드시 대조할 것.
+</div>
+
+<nav class="nav">
+  <a href="roadmap.html">← 성장 로드맵</a>
+  <a href="../lessons/0028-static-pods.html">최근 레슨: 0028</a>
+</nav>
+
+</div>
+</body>
+</html>

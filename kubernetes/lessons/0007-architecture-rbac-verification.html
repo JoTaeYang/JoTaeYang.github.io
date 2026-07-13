@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0007 — 검증: 아키텍처와 RBAC, 아직 단단한가</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0007 <span class="tag">검증 · 퀴즈만</span></p>
+<h1>검증: 아키텍처와 RBAC, 아직 단단한가</h1>
+<p class="subtitle">새로 배우는 것 없음. 인접 트랙(<code>../teach/</code>)에서 배운 지식이 KCNA 기준으로 살아 있는지 8문항으로 확인한다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> 갭 체크의 🔶 두 칸(아키텍처, RBAC)을 ✅ 또는
+"보강 필요"로 판정한다. 6개 이상 정답이면 ✅ — 틀린 주제만 다음에 보강한다.
+</div>
+
+<div class="note">
+회상 연습의 정석대로: 문서를 다시 보지 말고, 기억만으로 풀 것.
+막히는 감각 자체가 유용한 데이터다.
+</div>
+
+<h2>Part A — 컨트롤 플레인과 요청의 여정</h2>
+
+<div class="quiz">
+  <p class="q">Q1. <code>kubectl apply -f deploy.yaml</code> 직후, 매니페스트가 가장 먼저 도착해 저장되는 경로는?</p>
+  <div class="opts">
+    <button class="opt">scheduler 가 받아 검증한 뒤 etcd 에 직접 기록한다</button>
+    <button class="opt" data-correct="true">API server 가 인증/검증 후 etcd 에 기록한다</button>
+    <button class="opt">controller-manager 가 받아 API server 로 전달한다</button>
+  </div>
+  <div class="explain">모든 것의 관문은 API server 다. 인증(authn) → 인가(authz/RBAC) → admission → etcd 저장. 다른 어떤 컴포넌트도 이 순서를 건너뛸 수 없다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. etcd 와 직접 통신하는 컴포넌트는?</p>
+  <div class="opts">
+    <button class="opt">컨트롤 플레인의 모든 컴포넌트가 각자 직접 읽고 쓴다</button>
+    <button class="opt">API server 와 scheduler 둘만 읽기/쓰기 권한을 가진다</button>
+    <button class="opt" data-correct="true">API server 하나뿐이고 나머지는 전부 API server 를 거친다</button>
+  </div>
+  <div class="explain">etcd 의 유일한 클라이언트는 API server 다. scheduler 도 controller 도 kubelet 도 전부 API server 의 watch/list 를 통해서만 상태를 본다 — 그래서 API server 가 단일 관문이자 병목이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. scheduler 가 실제로 하는 일의 전부는?</p>
+  <div class="opts">
+    <button class="opt">선택한 노드의 kubelet 에 접속해 컨테이너 시작을 지시한다</button>
+    <button class="opt" data-correct="true">배치할 노드를 골라 Pod 의 nodeName 필드를 채워 넣는다</button>
+    <button class="opt">노드별 자원 사용량을 수집해 requests 장부를 갱신한다</button>
+  </div>
+  <div class="explain">scheduler 는 "결정"만 한다 — nodeName 이 비어 있는 Pod 를 발견하면 필터/점수 계산으로 노드를 골라 그 필드를 채울 뿐. 실행은 그 nodeName 을 watch 하던 kubelet 의 몫이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q4. 레슨 0002 에서 본 Deployment/ReplicaSet 의 제어 루프들 — 이 컨트롤러들이 실제로 돌고 있는 곳은?</p>
+  <div class="opts">
+    <button class="opt">각 노드의 kubelet 안에서 노드별로 분산되어 돈다</button>
+    <button class="opt">etcd 의 watch 트리거가 내장 루프를 직접 실행한다</button>
+    <button class="opt" data-correct="true">컨트롤 플레인의 kube-controller-manager 프로세스 안에서 돈다</button>
+  </div>
+  <div class="explain">Deployment 컨트롤러, ReplicaSet 컨트롤러, EndpointSlice 컨트롤러(레슨 0003)까지 — 수십 개의 루프가 kube-controller-manager 한 프로세스에 모여 돈다. 트랙 전체를 관통하던 "제어 루프"의 실체.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q5. scheduler 프로세스가 죽었다. 클러스터에서 일어나는 일은?</p>
+  <div class="opts">
+    <button class="opt">kubelet 이 API 접근을 잃어 기존 Pod 들이 순차적으로 종료된다</button>
+    <button class="opt" data-correct="true">기존 Pod 는 계속 돌고, 새 Pod 만 nodeName 없이 Pending 에 쌓인다</button>
+    <button class="opt">controller-manager 가 임시 스케줄러 역할을 이어받아 계속 배치한다</button>
+  </div>
+  <div class="explain">각 컴포넌트는 독립적이다. 실행 중인 Pod 는 kubelet 이 지키고, scheduler 부재의 증상은 정확히 "새 Pod 의 영원한 Pending" — 레슨 0006 의 Pending 감별에 한 가지 원인이 추가된 셈이다 (describe Events 에 스케줄 기록 자체가 없다는 점이 다르다).</div>
+</div>
+
+<h2>Part B — 인증과 인가 (RBAC)</h2>
+
+<div class="quiz">
+  <p class="q">Q6. Role 과 ClusterRole 의 차이는?</p>
+  <div class="opts">
+    <button class="opt" data-correct="true">Role 은 한 namespace 안의 권한, ClusterRole 은 클러스터 전역 권한을 정의한다</button>
+    <button class="opt">Role 은 사람 사용자 전용, ClusterRole 은 ServiceAccount 전용으로 나뉜다</button>
+    <button class="opt">Role 은 읽기 권한까지만, ClusterRole 은 쓰기/삭제 권한까지 담을 수 있다</button>
+  </div>
+  <div class="explain">경계는 namespace 다. 노드/PV 같은 namespace 없는 리소스나 전 namespace 권한은 ClusterRole 이 필요하다. 주체(사람/SA)나 동사(get/delete)와는 무관하다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q7. "누가(subject) 무엇을 할 수 있는지"가 실제로 성립되는 순간은?</p>
+  <div class="opts">
+    <button class="opt">Role 이 생성되는 순간 — rules 에 적힌 주체에게 즉시 적용된다</button>
+    <button class="opt" data-correct="true">RoleBinding 이 주체와 Role 을 연결하는 순간 — 그 전까지 Role 은 무력하다</button>
+    <button class="opt">주체가 첫 API 요청을 보내는 순간 — admission 단계에서 동적 부여된다</button>
+  </div>
+  <div class="explain">Role = 권한 목록(명사), RoleBinding = 부여(동사). Role 만 만들어 두면 아무 일도 일어나지 않는다 — 실기에서 "권한이 안 먹혀요"의 단골 원인이 Binding 누락이다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q8. ServiceAccount 가 존재하는 이유는?</p>
+  <div class="opts">
+    <button class="opt">사람 계정의 비밀번호를 클러스터 안에 안전하게 보관하기 위해</button>
+    <button class="opt">노드 간 kubelet 통신을 암호화하는 TLS 인증서를 발급하기 위해</button>
+    <button class="opt" data-correct="true">Pod 안의 프로세스가 API server 에 자신을 증명할 신원을 주기 위해</button>
+  </div>
+  <div class="explain">사람은 kubeconfig 로, Pod 는 ServiceAccount 토큰으로 API server 에 인증한다. 모든 Pod 는 지정 없으면 그 namespace 의 <code>default</code> SA 를 받는다 — 그리고 그 토큰의 권한을 좁히는 것이 CKS 의 단골 주제가 된다.</div>
+</div>
+
+<hr>
+
+<h2>판정</h2>
+<ul>
+  <li><b>6개 이상 정답</b> → 갭 체크의 🔶 두 칸을 ✅ 로 — 다음은 워크로드 4형제 실습.</li>
+  <li><b>5개 이하, 또는 특정 Part 집중 오답</b> → 틀린 주제만 겨냥한 보강 레슨을 먼저.</li>
+</ul>
+<p>결과를 채팅으로 — 어떤 번호를 틀렸는지, 맞았어도 오래 망설인 번호가 있었는지.</p>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">실습하다 떠오르는 "어? 이건 왜 이러지?"를 미리 모았다. 궁금한 것만 펼쳐 보면 된다 — 안 궁금하면 접힌 채 넘어가도 된다.</p>
+
+<details class="faq">
+<summary>API server 가 죽으면 클러스터가 통째로 멈추나요?</summary>
+<div class="a"><p>이미 <b>돌고 있는 Pod 는 계속 돈다</b> — 각 노드의 kubelet 이 로컬에서 컨테이너를 지키기 때문이다. 하지만 <em>새로운 변경</em>은 전부 막힌다: <code>kubectl</code> 도, scheduler·controller-manager 의 watch 도 전부 API server 를 거치므로 배치·복구·스케일이 멈춘다. "관문 하나가 곧 단일 장애점"이라 실무에선 API server 를 다중화한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>etcd 는 왜 API server 만 접근하나요? 다른 컴포넌트가 직접 읽으면 안 되나요?</summary>
+<div class="a"><p>일부러 그렇게 막아 뒀다. etcd 앞에 API server 하나만 세워야 인증·인가(RBAC)·admission·검증이 <b>딱 한 곳</b>에서 강제된다 — 여러 클라이언트가 제각각 etcd 를 만지면 그 관문을 우회할 길이 생긴다. 그래서 etcd 의 유일한 클라이언트는 API server 이고, 나머지는 전부 watch/list 로 상태를 본다(Q2 의 핵심).</p></div>
+</details>
+
+<details class="faq">
+<summary>scheduler 랑 controller-manager 는 뭐가 다른가요?</summary>
+<div class="a"><p>scheduler 는 "<b>어디에</b>?"만 답한다 — nodeName 이 빈 Pod 를 보고 노드를 골라 그 필드를 채운다(Q3). controller-manager 는 "<b>얼마나·상태 맞추기</b>" 담당 — Deployment·ReplicaSet 같은 수십 개 조정 루프가 desired ↔ actual 을 계속 좁힌다(Q4). 배치 결정 vs 상태 조정, 서로 다른 프로세스다.</p></div>
+</details>
+
+<details class="faq">
+<summary>컨트롤 플레인 컴포넌트도 그냥 Pod 인가요?</summary>
+<div class="a"><p>kubeadm·kind 로 만든 클러스터에선 대체로 그렇다 — API server·scheduler·controller-manager·etcd 가 <b>static Pod</b> 로 뜬다(kubelet 이 <code>/etc/kubernetes/manifests</code> 의 YAML 을 보고 직접 띄우는, API server 없이도 뜨는 특수 Pod). <code>kubectl get pods -n kube-system</code> 으로 눈으로 확인할 수 있다. 부트스트랩의 닭-달걀 문제를 static Pod 가 푼다.</p></div>
+</details>
+
+<details class="faq">
+<summary>admission controller 가 뭐예요? (Q1 에 나왔는데 이 레슨은 안 다뤘어요)</summary>
+<div class="a"><p>요청이 인증(authn) → 인가(authz/RBAC) 를 통과한 뒤, <b>etcd 에 저장되기 직전</b>에 끼어드는 마지막 검문소다. 값을 바꾸거나(mutating: 기본값 주입, sidecar 삽입) 통째로 거부한다(validating: 정책 위반 차단). "RBAC 은 통과했는데 왜 거부되죠?"의 흔한 범인 — CKA/CKS 로 이어지는 실이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>kube-proxy 는 어디서 뭘 하나요? 컨트롤 플레인 컴포넌트인가요?</summary>
+<div class="a"><p>아니다 — kube-proxy 는 <b>모든 워커 노드</b>에 하나씩 도는 데이터 평면 요소다. Service 의 가상 IP 로 온 트래픽을 실제 Pod 들로 넘기는 iptables/IPVS 규칙을 각 노드에 심는다(레슨 0003 의 EndpointSlice 를 watch 해서). 컨트롤 플레인이 "결정"이라면 kube-proxy 는 노드에서 그걸 "집행"하는 쪽이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>scheduler 가 죽었다 살아나면 밀렸던 Pending Pod 들은 어떻게 되나요?</summary>
+<div class="a"><p>알아서 처리된다. scheduler 는 nodeName 이 빈 Pod 를 <b>watch</b> 로 계속 지켜보다가, 다시 뜨는 순간 쌓여 있던 Pending 들을 하나씩 배치한다 — 상태(desired)는 etcd 에 그대로 남아 있으니 잃는 것이 없다. 이 "선언한 상태는 남고, 컨트롤러가 나중에 따라잡는다"가 쿠버네티스 전반을 관통하는 원리다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Role 만 만들고 RoleBinding 을 안 만들면 어떻게 되나요?</summary>
+<div class="a"><p><b>아무 일도 안 일어난다</b>(Q7). Role 은 권한 <em>목록</em>(명사)일 뿐, 존재만으로는 누구에게도 붙지 않는다. RoleBinding 이 주체(사람/SA)와 Role 을 이어야 비로소 권한이 성립한다. 실기에서 "권한 줬는데 안 먹혀요"의 단골 원인이 바로 이 Binding 누락 — 0008 실습에서 손으로 각인한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>ServiceAccount 랑 그냥 사용자 계정은 뭐가 다른가요?</summary>
+<div class="a"><p>인증하는 주체가 다르다: <b>사람</b>은 kubeconfig 의 인증서/토큰으로, <b>Pod 안 프로세스</b>는 ServiceAccount 토큰으로 API server 에 자신을 증명한다(Q8). SA 는 클러스터가 관리하는 신원이고, 모든 Pod 는 지정이 없으면 그 namespace 의 <code>default</code> SA 를 자동으로 받는다. 그 기본 SA 의 권한을 좁히는 게 CKS 단골 주제다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Role 과 ClusterRole, 시험에서 뭘로 가르나요?</summary>
+<div class="a"><p>딱 한 질문: <b>"이 권한이 한 namespace 안에서만 필요한가?"</b> 예 → Role, 아니오 → ClusterRole(Q6). 주체가 사람이냐 SA 냐, 동사가 읽기냐 쓰기냐는 <em>전혀 상관없다</em> — 오답 보기들이 노리는 함정이 정확히 그것이다. node·PV 처럼 애초에 namespace 가 없는 리소스도 ClusterRole 영역이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>회상 퀴즈에서 오래 망설였는데 정답이면 ✅ 로 쳐도 되나요?</summary>
+<div class="a"><p>표시는 해 두는 게 좋다. 맞았어도 <b>오래 망설인 문항</b>은 아직 "인출 강도"가 약하다는 신호 — 며칠 뒤 다시 물으면 틀릴 확률이 높은 후보다. 그래서 0008 이 controller-manager 문항을 재시험으로 다시 낸다. 간격 반복은 "맞았나"보다 "얼마나 매끄럽게 나왔나"를 본다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/architecture/">공식 문서: Cluster Architecture</a> ·
+<a href="https://kubernetes.io/docs/reference/access-authn-authz/rbac/">RBAC Authorization</a> —
+틀린 문항이 있을 때만 해당 절을 다시 읽는다. 다 맞았다면 읽지 않고 넘어간다 (과투자 금지).
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "admission controller 가 뭐지?", "kube-proxy 는 어디서 뭘 하지?" —
+이 레슨이 다루지 않은 인접 개념이 궁금해지는 것도 좋은 신호다.
+</div>
+
+<nav class="nav">
+  <a href="0006-requests-limits-scheduling.html">← 0006 requests/limits</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

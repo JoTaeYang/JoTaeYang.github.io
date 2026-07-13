@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 7 — 모델은 결국 숫자다: 파라미터·레이어·임베딩</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .fmt { width:100%; border-collapse:collapse; font-size:0.9rem; margin:1.1rem 0; }
+  .fmt th, .fmt td { padding:0.45rem 0.6rem; border-bottom:1px solid var(--rule); text-align:left; }
+  .fmt th { font-family:system-ui,sans-serif; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); }
+  .vec { font-family:"SF Mono",Menlo,monospace; font-size:0.82rem; background:var(--code-bg); border:1px solid var(--rule); border-radius:8px; padding:0.8rem 1rem; margin:0.9rem 0; line-height:1.7; white-space:pre; overflow-x:auto; }
+  .pos { color:#166534; font-weight:700; }
+  .neg { color:#991b1b; font-weight:700; }
+  .flow { font-family:"SF Mono",Menlo,monospace; font-size:0.8rem; background:#f8fafc; border:1px solid var(--rule); border-radius:8px; padding:0.9rem 1.1rem; margin:1rem 0; line-height:1.55; white-space:pre; overflow-x:auto; }
+  h2 .n { color:var(--accent); font-family:system-ui,sans-serif; font-size:0.9rem; margin-right:0.4rem; }
+</style>
+</head>
+<body>
+
+<p class="kicker">Lesson 07 · Phase 1–2 · Foundations (개념의 바닥)</p>
+<h1>모델은 결국 숫자다: 파라미터·레이어·임베딩</h1>
+<p class="subtitle">"70B 파라미터"가 실제로 무엇이고, 무슨 일을 하며, 왜 매 토큰 전부 읽어야 하는가 — 곁가지 질문들이 모여 만든, 코스의 밑바닥.</p>
+
+<div class="callout key">
+  <span class="label">이번 레슨의 단 하나의 승리</span>
+  "모델 = 학습된 숫자 덩어리"라는 한 문장을 완전히 분해한다: <strong>파라미터당 바이트 → 파라미터의 역할 →
+  레이어 → 임베딩 벡터 → 벡터 값의 의미</strong>. 이걸로 <a href="0001-why-inference-is-memory-bound.html">L1(왜 전체를 읽나)</a>과
+  <a href="0006-quantization.html">L6(양자화)</a>이 바닥까지 닫힌다.
+</div>
+
+<h2><span class="n">1</span>"파라미터당 바이트"란</h2>
+<p>
+모델은 <strong>엄청나게 많은 숫자 덩어리</strong>다. 그 숫자 하나하나가 <strong>파라미터(=가중치)</strong>.
+"70B 모델" = <strong>700억 개의 숫자</strong>. 각 숫자는 학습으로 정해진 실수(예: <span class="mono">0.7314…</span>)다.
+</p>
+<p>컴퓨터는 숫자를 <strong>비트(0/1)</strong>로 저장하는데, <em>숫자 하나에 비트를 몇 개 쓸지는 선택</em>이다. C의 타입을 떠올리면 정확하다:</p>
+<pre>int   x;  // 4바이트
+short y;  // 2바이트
+char  z;  // 1바이트</pre>
+<p>실수도 같다. <strong>같은 숫자 하나</strong>를 어떤 포맷에 담느냐에 따라 차지하는 바이트가 다르다 — 이게 <strong>파라미터당 바이트</strong>:</p>
+<table class="fmt">
+  <tr><th>포맷</th><th>비트</th><th>파라미터당 바이트</th><th>같은 값 0.7314 저장 시</th></tr>
+  <tr><td>FP16</td><td>16</td><td>2.0 B</td><td>0.7314 (거의 그대로)</td></tr>
+  <tr><td>FP8</td><td>8</td><td>1.0 B</td><td>0.73 (반올림)</td></tr>
+  <tr><td>FP4</td><td>4</td><td>0.5 B <span class="small">(둘이 1바이트)</span></td><td>0.75 (거칠게)</td></tr>
+</table>
+<p>사진을 고/저해상도로 저장하는 것과 같다 — <strong>같은 내용, 파일 크기만 다르고, 저해상도는 디테일이 날아간다</strong>(정확도 손실).
+그래서 <span class="mono">모델 총 바이트 = 파라미터 수 × 파라미터당 바이트</span>. 양자화는 <strong>뒤 항만</strong> 줄인다(개수는 그대로).</p>
+
+<h2><span class="n">2</span>700억 개의 숫자가 하는 일</h2>
+<p>
+신경망의 기본 동작은 단순하다 — <strong>입력 숫자에 가중치를 곱해 더하기</strong>:
+</p>
+<div class="vec">출력 = w1·x1 + w2·x2 + w3·x3 + … + b
+            ↑ 이 w(weight)들이 파라미터</div>
+<p>
+LLM에서 한 <strong>레이어</strong>가 하는 일은, 토큰 벡터를 <strong>거대한 가중치 행렬로 곱해</strong> 새 벡터로 바꾸는 것:
+</p>
+<div class="flow">[8,192개 숫자]  ×  [8,192 × 8,192 가중치 행렬]  →  [8,192개 숫자]
+   입력 토큰         ← 이 행렬이 파라미터 6,700만 개 →      변환된 토큰</div>
+<p>
+행렬 하나가 벌써 <span class="mono">8,192² ≈ 6,700만</span> 개. 한 레이어엔 이런 행렬이 여러 개(어텐션의 Q·K·V 만드는 행렬 + FFN 행렬),
+그런 레이어가 ~80층 → 합쳐서 <strong>수백억 개</strong> = "70B". 파라미터는 <strong>거대한 믹싱 콘솔의 700억 개 노브</strong>이고,
+학습이 그 값을 정하고, 추론은 <em>고정된 노브로 계산만 흘려보내는</em> 것이다.
+</p>
+
+<h2><span class="n">3</span>레이어란 무엇인가</h2>
+<p>
+<strong>레이어 = 토큰 벡터들을 한 번 다듬어 내보내는 처리 단계 하나.</strong> 입력과 출력의 <em>모양이 같아서</em>
+똑같은 구조를 계속 이어 붙일 수 있다. 시스템 관점으론 <strong>함수 합성</strong>:
+</p>
+<div class="flow">출력 = f₈₀( … f₂( f₁( 입력 ) ) )
+       각 fᵢ: 구조는 같고(벡터열→벡터열), 내부 상수(파라미터)만 다름 = 파이프라인 스테이지</div>
+<p>레이어 하나 안에는 두 하위 단계가 있다:</p>
+<table class="fmt">
+  <tr><th>하위 단계</th><th>하는 일</th><th>비유</th></tr>
+  <tr><td>① 어텐션 (<a href="0003-what-is-attention.html">L3</a>)</td><td>토큰들이 <strong>서로 정보 교환</strong> ("그것"↔"동물")</td><td>회의: 서로 대화</td></tr>
+  <tr><td>② FFN (피드포워드)</td><td>각 토큰이 <strong>혼자서</strong> 그 정보를 곱씹어 변환</td><td>회의 후 각자 정리</td></tr>
+</table>
+<p class="small">(residual 연결·정규화도 끼지만 지금은 "어텐션 + FFN 한 세트"로 충분.) 층을 지날수록 벡터는 더 추상적 의미를 담는다 —
+앞쪽 층: 문법·표면, 뒤쪽 층: 문맥·의도. 한 번으론 부족하니 80번 정제한다.</p>
+
+<h2><span class="n">4</span>토큰은 왜 벡터로 표현되나</h2>
+<p>
+신경망은 <strong>숫자만 곱할 줄 안다</strong>. 글자 "동물"은 곱할 수 없으니 숫자로 바꿔야 한다. 그런데 <em>숫자 하나</em>면
+모든 단어가 일직선 위 한 점이라 다면적 관계를 못 담는다. 그래서 <strong>벡터(숫자 여러 개) = 의미 공간의 좌표</strong>를 쓴다:
+</p>
+<div class="vec">"동물"   = [ <span class="pos">0.8</span>,  0.1,  <span class="pos">0.9</span>, <span class="neg">-0.3</span>, … ]   ← 8,192개
+"고양이" = [ <span class="pos">0.7</span>,  0.2,  <span class="pos">0.9</span>, <span class="neg">-0.2</span>, … ]   ← "동물"과 비슷한 방향
+"길"     = [ <span class="neg">-0.4</span>, <span class="pos">0.9</span>, <span class="neg">-0.1</span>,  0.6, … ]   ← 전혀 다른 방향</div>
+<p>
+비슷한 의미 → 가까운 벡터. 그래서 <span class="mono">king − man + woman ≈ queen</span> 같은 벡터 산술이 성립한다.
+그리고 이것이 <strong>L3의 "내적 = 유사도"를 닫는다</strong>: 두 벡터가 같은 방향이면 내적이 크다 = 비슷한 의미 = 높은 관련도.
+<em>토큰을 벡터로 만들었기에</em> 어텐션이 내적으로 관련도를 잴 수 있다.
+</p>
+<p>토큰→벡터 변환은 <strong>임베딩 테이블</strong>(조회표)로 하며, 이 표의 숫자들도 <strong>학습된 파라미터</strong>다.</p>
+
+<h2><span class="n">5</span>벡터 값(+1/−1)의 의미와, 축은 어떻게 의미를 갖나</h2>
+<p><strong>값 = 각 축에서의 좌표.</strong> 부호는 방향, 크기는 강도, 그리고 <em>상대적</em>이다:</p>
+<div class="vec">어떤 축이 (느슨하게) "생물 ↔ 무생물"이라면:
+  "동물" → <span class="pos">+0.9</span>  (생물 쪽으로 강하게)
+  "돌"   → <span class="neg">-0.9</span>  (무생물 쪽으로 강하게)
+  "그것" →  0.1   (이 축에선 중립/무관)</div>
+<p class="small">값이 대략 −1~1에 머무는 건 우연이 아니라 <strong>정규화(normalization) 층</strong>이 벡터 크기를 눌러 학습을 안정시키기 때문.</p>
+
+<div class="callout key">
+  <span class="label">축의 의미는 아무도 안 정한다 — 학습으로 창발한다</span>
+  사람이 "1번 축 = 생물다움"이라 지정하지 <em>않는다</em>. 처음엔 전부 랜덤 → 목표는 오직 <strong>"다음 토큰 맞히기"</strong> →
+  틀릴 때마다 <strong>경사하강법</strong>이 700억 노브를 아주 조금씩 "예측이 나아지는 방향"으로 돌림 → 수조 토큰 반복 →
+  잘 맞히기에 유리한 배치로 공간이 <strong>스스로 정렬</strong>된다.
+</div>
+
+<div class="callout">
+  <span class="label">정직한 교정: 축 하나 = 개념 하나가 아니다</span>
+  위에서 "1번 축=생물다움"이라 한 건 이해를 돕는 <strong>단순화</strong>다. 실제 의미는 개별 축이 아니라
+  <strong>여러 축의 조합(공간 속 '방향')에 분산</strong>되어 있다 — <strong>분산 표현(distributed representation)</strong>.
+  그래서 숫자 하나만 떼면 대개 해석 불가. "성별" 방향이 공간 어딘가 학습으로 생겼기에 <span class="mono">king−man+woman≈queen</span>이 되는 것.
+</div>
+
+<h2><span class="n">6</span>다 합치면: "그것"이 "동물"인 걸 어떻게 알아내나</h2>
+<p>
+지금까지의 조각(임베딩 벡터 + 어텐션 + 레이어)이 <strong>실제로 어떻게 대명사를 푸는지</strong> 한 문장으로 따라가 보자:
+</p>
+<div class="vec">"그 <span class="pos">동물</span>은 <span class="neg">길</span>을 건너지 않았다, 너무 피곤했기 때문에. <span class="pos">그것</span>은 쉬고 싶었다."</div>
+<p class="small"><strong>핵심 전제:</strong> 임베딩 직후 "그것"의 벡터엔 "동물"을 가리킨다는 정보가 <em>없다</em>. 그 연결은 <strong>레이어를 지나며 어텐션이 문맥을 섞어 넣을 때 생긴다</strong>.</p>
+<ol>
+  <li><strong>"그것"이 Query를 만든다</strong> (학습된 <span class="mono">W_Q</span>로). 뜻: <em>"앞에 나온, 지치고 쉬고 싶어 할 만한 개체(명사)를 찾아라."</em></li>
+  <li><strong>과거 토큰이 Key를 만든다</strong> (<span class="mono">W_K</span>로): <span class="mono">K("동물")</span> ≈ "생물 명사, 지칠 수 있음" / <span class="mono">K("길")</span> ≈ "무생물, 장소".</li>
+  <li><strong>Q·K 내적으로 점수</strong> (§5의 '내적=유사도'):
+    <div class="vec">Q("그것") · K("<span class="pos">동물</span>")  →  방향 정렬  →  softmax <span class="pos">0.70</span>
+Q("그것") · K("<span class="neg">길</span>")    →  방향 어긋남 →  softmax <span class="neg">0.08</span></div>
+    L3에서 봤던 그 0.70/0.08이 여기서 나온다.</li>
+  <li><strong>Value 가중합 → 흡수</strong>: 큰 가중치로 <span class="mono">V("동물")</span>이 "그것"의 새 벡터에 섞여, <strong>"그것" 벡터 안에 "동물"의 의미가 실제로 담긴다.</strong></li>
+</ol>
+
+<div class="callout key">
+  <span class="label">왜 "길"이 아니라 "동물"인가 — 의미 단서</span>
+  단순히 "가장 가까운 명사"를 고르는 게 <em>아니다</em>. "<strong>피곤했기 때문에</strong>", "<strong>쉬고 싶었다</strong>"는 <strong>생물</strong>에게나 해당한다.
+  그래서 "그것"의 Query가 찾는 방향(지칠 수 있는 개체)이 <span class="mono">K("동물")</span>과 정렬되고 <span class="mono">K("길")</span>과는 어긋난다.
+  이 판단은 §5의 <strong>학습으로 생긴 방향들</strong>(생물다움·피곤함)로 이뤄진다 — 그 유명한 <em>Winograd 스키마</em> 추론.
+</div>
+
+<p>
+이 정렬이 가능한 건 <strong>경사하강법</strong>(§5)이, 지시 대상을 맞게 이었을 때 예측이 좋아지는 걸 보고 <span class="mono">W_Q·W_K</span>를
+"대명사 Query가 알맞은 선행 명사 Key와 정렬되도록" 수조 문장에 걸쳐 다듬었기 때문이다. 그리고 이건 한 방에 되는 게 아니라
+<strong>여러 헤드가 서로 다른 가설(가까운 명사·주어·생물 개체)을 검사하고, 여러 층을 거치며 확정</strong>된다.
+</p>
+<p class="small"><strong>정직한 한계:</strong> "이 뉴런이 코어퍼런스 담당"이라 딱 짚진 못한다 — 판단은 §5처럼 분산·창발적이다. 하지만 <em>메커니즘</em>(대명사 Q ↔ 알맞은 명사 K 정렬 → V 흡수, 학습으로 조정, 층·헤드에 걸쳐)은 위 그대로다.</p>
+
+<h2>전체를 하나로</h2>
+<div class="flow">토큰 "동물"
+   ↓ 임베딩 테이블(파라미터)
+[벡터]  ← 의미 좌표 (부호=방향, 크기=강도)
+   ↓ 레이어 80개 통과 (매 층: 어텐션+FFN, 자기 파라미터로 곱셈)
+[정제된 벡터]
+   ↓ 다음 토큰 예측
+
+⇒ 매 토큰: 700억 파라미터를 전부 통과 = 가중치 전체 읽기 (L1)
+⇒ 각 숫자를 몇 바이트로 저장? = 양자화 (L6)</div>
+
+<div class="quiz" data-answer="1">
+  <div class="q">임베딩 벡터에서 각 차원(축)의 '의미'는 어떻게 정해지나?</div>
+  <button class="opt">모델 설계자가 축마다 개념을 손으로 지정한다</button>
+  <button class="opt">'다음 토큰 맞히기' 학습 중 경사하강법으로 저절로 창발한다</button>
+  <button class="opt">사전(dictionary)의 정의를 그대로 각 축에 넣는다</button>
+  <button class="opt">토큰의 알파벳 순서에 따라 자동으로 배정된다</button>
+  <div class="feedback"
+       data-correct="정확하다. 축 의미는 지정되지 않고 학습으로 창발하며, 대개 한 축이 아니라 여러 축의 '방향'에 분산된다(분산 표현)."
+       data-wrong="다시 보자. 사람이 축 의미를 정하지 않는다. 오직 '다음 토큰 맞히기' 목표 아래 경사하강법이 공간을 스스로 정렬한다."></div>
+</div>
+
+<div class="callout">
+  <span class="label">스스로 확인 (retrieval practice)</span>
+  종이를 덮고: ⑴ 양자화가 줄이는 건 파라미터 '수'인가 '파라미터당 바이트'인가? ⑵ 레이어를 함수로 비유하면?
+  ⑶ 토큰을 '숫자 하나' 아닌 '벡터'로 두는 이유는? ⑷ 축의 의미는 누가 정하나?
+  ⑸ "그것→동물" 연결은 어느 단계에서, 무엇의 정렬로 생기나?
+</div>
+
+<h2>가장 먼저 볼 자료 (primary source)</h2>
+<p>
+3Blue1Brown, <a href="https://www.3blue1brown.com/topics/neural-networks"><em>Neural networks</em> 시리즈</a> —
+파라미터·레이어·임베딩·경사하강을 시각적으로 가장 잘 설명. 트랜스포머 구조는
+Jay Alammar, <a href="https://jalammar.github.io/illustrated-transformer/"><em>The Illustrated Transformer</em></a>.
+</p>
+
+<div class="ask">
+  🧑‍🏫 <strong>막히면 바로 물어보세요.</strong> "경사하강법이 노브를 어떻게 돌려?(backprop)", "FFN이 정확히 무슨 계산?",
+  "분산 표현이 왜 좋아?", "마지막에 벡터를 어떻게 단어로 되돌려?(LM head)"
+</div>
+
+<hr>
+<p class="refs"><strong>References</strong></p>
+<ol class="refs">
+  <li>[1] 3Blue1Brown, <a href="https://www.3blue1brown.com/topics/neural-networks">Neural networks</a>.</li>
+  <li>[2] Jay Alammar, <a href="https://jalammar.github.io/illustrated-transformer/">The Illustrated Transformer</a>.</li>
+</ol>
+
+<div class="lesson-nav">
+  <span><a href="0006-quantization.html">← Lesson 6 (양자화)</a></span>
+  <span><a href="../index.html">🏠 Hub</a> · <a href="../reference/glossary.html">Glossary</a> · Next: MTP / Speculative decoding (예정)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vLLM 파라미터 치트시트</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  :root { --maxw: 860px; }
+  table.ref { border-collapse:collapse; width:100%; font-size:0.84rem; margin:0.8rem 0 1.6rem; }
+  table.ref th, table.ref td { border:1px solid var(--rule); padding:0.4rem 0.55rem; text-align:left; vertical-align:top; }
+  table.ref th { background:#f8fafc; font-family:system-ui,sans-serif; font-size:0.74rem; }
+  table.ref td:first-child { font-family:"SF Mono",Menlo,monospace; font-size:0.78rem; white-space:nowrap; }
+  h2 { font-size:1.2rem; }
+  @media print { body { margin:1rem auto; } .ask { display:none; } }
+</style>
+</head>
+<body>
+
+<p class="kicker">Reference · vLLM</p>
+<h1>vLLM 파라미터 치트시트</h1>
+<p class="subtitle">엔진(서버) 파라미터 = 시작 시 1회, 전원 공유. SamplingParams = 요청마다. 근거: <a href="https://docs.vllm.ai/en/stable/configuration/engine_args/">docs.vllm.ai — Engine Arguments</a> (stable, 2026-07 확인).</p>
+
+<h2>① 메모리 예산 (KV 캐시 예산을 정한다 — L2·L4)</h2>
+<table class="ref">
+  <tr><th>플래그</th><th>기본값</th><th>역할 / 튜닝 방향</th></tr>
+  <tr><td>--gpu-memory-utilization</td><td>0.92</td><td>인스턴스가 쓸 GPU 메모리 비율. ↑ = KV 예산↑, 과하면 startup OOM.</td></tr>
+  <tr><td>--max-model-len</td><td>model config</td><td>시퀀스 최대 길이(프롬프트+생성) = 시퀀스 1개의 KV 상한. 워크로드가 허용하면 줄여서 동시성 확보.</td></tr>
+  <tr><td>--kv-cache-dtype</td><td>auto</td><td>KV 캐시만 양자화 (<code>fp8</code>, <code>fp8_e5m2</code>, <code>fp8_e4m3</code>). 캐시 용량 2배 + 디코드 읽기 바이트↓.</td></tr>
+  <tr><td>--block-size</td><td>16</td><td>PagedAttention 페이지 크기(토큰). 대개 건드리지 않음.</td></tr>
+  <tr><td>--swap-space</td><td>4 (GiB)</td><td>시퀀스별 CPU 스왑 공간(선점 시 사용).</td></tr>
+  <tr><td>--enable-prefix-caching</td><td>V1 기본 on</td><td>프롬프트 공통 접두사의 KV 블록 재사용 — 시스템 프롬프트가 길고 공유될 때 prefill 대폭 절감.</td></tr>
+</table>
+
+<h2>② 스케줄러 (반복당 정원 — L4·L5)</h2>
+<table class="ref">
+  <tr><th>플래그</th><th>기본값</th><th>역할 / 튜닝 방향</th></tr>
+  <tr><td>--max-num-seqs</td><td>context별 (~256)</td><td>반복당 동시 시퀀스 상한. 실전에선 KV 예산이 먼저 바닥나는 경우가 많다.</td></tr>
+  <tr><td>--max-num-batched-tokens</td><td>context별 파생</td><td>반복당 토큰 예산 = chunked prefill 청크 크기. ↓ = ITL 안정, ↑ = prefill 처리량/TTFT 개선.</td></tr>
+  <tr><td>--enable-chunked-prefill</td><td>V1 기본 on</td><td>긴 prefill을 잘라 디코드와 한 배치에 섞기 (L5 그 자체).</td></tr>
+</table>
+
+<h2>③ 바이트 줄이기 / 읽기당 토큰 늘리기 (L6·L7·L9)</h2>
+<table class="ref">
+  <tr><th>플래그</th><th>기본값</th><th>역할 / 튜닝 방향</th></tr>
+  <tr><td>--dtype</td><td>auto</td><td>가중치·연산 기본 정밀도: <code>bfloat16</code>·<code>float16</code>·<code>float32</code>. 양자화 아님.</td></tr>
+  <tr><td>--quantization / -q</td><td>None</td><td>가중치 양자화 방식: <code>fp8</code>·<code>awq</code>·<code>gptq</code>·<code>bitsandbytes</code> 등. 양자화된 체크포인트는 대개 자동 감지.</td></tr>
+  <tr><td>--speculative-config</td><td>None</td><td>JSON: <code>{"method":"mtp","num_speculative_tokens":2}</code>. method: <code>mtp</code>·<code>eagle</code>·<code>eagle3</code>·<code>draft_model</code>·<code>ngram</code>. num_speculative_tokens = K(L9).</td></tr>
+</table>
+
+<h2>④ 멀티 GPU</h2>
+<table class="ref">
+  <tr><th>플래그</th><th>기본값</th><th>역할</th></tr>
+  <tr><td>--tensor-parallel-size</td><td>1</td><td>레이어 행렬을 N GPU에 세로 분할, 매 토큰 전원 참여. 노드 내(NVLink) 기본 수단.</td></tr>
+  <tr><td>--pipeline-parallel-size</td><td>1</td><td>레이어를 가로 분할(층별 담당). 주로 노드 간. 총 GPU = TP × PP.</td></tr>
+</table>
+
+<h2>⑤ 기타 자주 보이는 것</h2>
+<table class="ref">
+  <tr><th>플래그</th><th>역할</th></tr>
+  <tr><td>--enforce-eager</td><td>CUDA graph 비활성(디버깅용). 켜면 느려진다 — CUDA graph는 Phase 3/4 주제.</td></tr>
+  <tr><td>--served-model-name</td><td>API에 노출할 모델 이름 별칭.</td></tr>
+  <tr><td>--seed</td><td>샘플링 재현성.</td></tr>
+  <tr><td>--max-logprobs</td><td>요청당 반환 가능한 logprob 수 상한.</td></tr>
+</table>
+
+<h2>SamplingParams (요청 단위 — 성능이 아니라 출력 제어)</h2>
+<table class="ref">
+  <tr><th>키</th><th>역할</th></tr>
+  <tr><td>temperature</td><td>분포 평탄화(0 = greedy). L9의 p·q 분포가 이것의 영향을 받는다.</td></tr>
+  <tr><td>top_p / top_k</td><td>누적확률 / 상위 k개로 후보 절단.</td></tr>
+  <tr><td>max_tokens</td><td>생성 길이 상한 — 분포가 길수록 서버 KV 예산을 오래 점유.</td></tr>
+  <tr><td>stop / stop_token_ids</td><td>중단 문자열/토큰.</td></tr>
+  <tr><td>n</td><td>요청당 후보 수 (KV는 n배 아님 — 프리픽스 공유).</td></tr>
+</table>
+
+<h2>증상 → 첫 번째 용의자</h2>
+<table class="ref">
+  <tr><th>증상</th><th>보정</th></tr>
+  <tr><td>시작하자마자 OOM</td><td>--gpu-memory-utilization ↓, --max-model-len ↓, -q fp8, TP ↑</td></tr>
+  <tr><td>동시 요청 수가 안 나옴 (대기열↑)</td><td>--max-model-len ↓, --kv-cache-dtype fp8 (시퀀스당 KV↓ → 정원↑)</td></tr>
+  <tr><td>긴 프롬프트 유입 시 ITL 스파이크</td><td>--max-num-batched-tokens ↓ (청크 축소, L5)</td></tr>
+  <tr><td>TTFT가 너무 느림</td><td>--max-num-batched-tokens ↑, --enable-prefix-caching 확인</td></tr>
+  <tr><td>단일 사용자 tok/s가 낮음</td><td>--speculative-config (MTP/EAGLE), -q fp8 — 단 둘의 결합은 측정 필수(L9)</td></tr>
+  <tr><td>모델이 GPU에 안 들어감</td><td>-q(fp8/awq) 먼저, 그래도 안 되면 --tensor-parallel-size ↑</td></tr>
+</table>
+
+<p class="small">레슨: <a href="../lessons/0010-vllm-engine-args.html">L10 — vLLM 엔진 파라미터</a> · <a href="../index.html">🏠 Hub</a> · <a href="glossary.html">용어집</a></p>
+
+</body>
+</html>

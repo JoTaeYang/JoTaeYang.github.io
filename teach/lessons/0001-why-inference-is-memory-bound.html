@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 1 — 왜 LLM 추론은 '메모리' 문제인가</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<p class="kicker">Lesson 01 · Phase 0 — Mental Model</p>
+<h1>왜 LLM 추론은 '계산'이 아니라 '메모리' 문제인가</h1>
+<p class="subtitle">토큰 하나를 만드는 데 드는 진짜 비용은 곱셈이 아니라, 가중치를 메모리에서 끌어오는 시간이다.</p>
+
+<div class="callout key">
+  <span class="label">이번 레슨의 단 하나의 승리</span>
+  종이 한 장으로 <strong>“이 GPU에서 이 모델은 최대 몇 tokens/sec 나오는가”</strong>의
+  <em>이론적 상한</em>을 직접 계산할 수 있게 된다. 서빙 최적화의 모든 판단은 여기서 출발한다.
+</div>
+
+<h2>왜 이걸 제일 먼저 배우나</h2>
+<p>
+당신의 미션은 <strong>실무에서 LLM 추론을 서빙하고 최적화</strong>하는 것이다. 그런데 최적화란
+결국 “무엇이 병목인가”를 아는 것이다. LLM 추론에서 초보자가 가장 먼저 갖는 착각은
+<em>“모델이 크니까 계산(FLOPs)이 오래 걸린다”</em>는 것이다. 사실은 정반대다.
+Sionic이 GLM-5.2를 단일 GPU에서 10배 빠르게 만든 글<sup class="cite">[1]</sup>의 거의 모든 기법은,
+바로 이 <strong>메모리 병목</strong>이라는 한 문장을 공략한다. 그 문장을 오늘 몸으로 이해한다.
+</p>
+
+<h2>핵심 아이디어</h2>
+<p>
+LLM은 토큰을 <a href="../reference/glossary.html">한 번에 하나씩</a> 만든다(자기회귀 디코딩).
+토큰 하나를 만들 때마다, GPU는 <strong>모델의 가중치 전체를 메모리(HBM)에서 연산 유닛으로 한 번 읽어와야</strong> 한다.
+문제는 이 “읽어오는 속도”(메모리 대역폭)가, “읽어온 뒤 계산하는 속도”보다 압도적으로 느리다는 것이다.
+</p>
+
+<div class="callout">
+  <span class="label">한 문장</span>
+  토큰당 시간 ≈ <span class="mono">(읽어야 할 가중치 바이트) ÷ (메모리 대역폭)</span>.
+  계산 시간은 그 옆에서 반올림 오차 수준이다.
+</div>
+
+<h2>직접 계산해 보자</h2>
+<p class="small">예시: 70B 파라미터 모델을 FP8(파라미터당 1바이트)로, NVIDIA B300(대역폭 ≈ 8&nbsp;TB/s, 연산 ≈ 15&nbsp;PFLOP/s) 위에서, 배치 크기 1로 돌린다.</p>
+
+<div class="calc">
+  <table>
+    <tr><td>① 읽어야 할 가중치</td><td>70B × 1 byte = 70 GB / 토큰</td></tr>
+    <tr><td>② 메모리 대역폭</td><td>8 TB/s = 8,000 GB/s</td></tr>
+    <tr class="result"><td>메모리로 인한 토큰당 시간 = ① ÷ ②</td><td>70 / 8000 ≈ <strong>8.75 ms</strong></td></tr>
+  </table>
+</div>
+
+<p>이제 <em>계산</em> 쪽 시간도 재보자. 파라미터 1개당 곱셈+덧셈 2 FLOP:</p>
+
+<div class="calc">
+  <table>
+    <tr><td>③ 필요한 계산량</td><td>70B × 2 = 140 GFLOP / 토큰</td></tr>
+    <tr><td>④ GPU 연산 능력</td><td>15 PFLOP/s = 15,000,000 GFLOP/s</td></tr>
+    <tr class="result"><td>계산으로 인한 토큰당 시간 = ③ ÷ ④</td><td>140 / 15,000,000 ≈ <strong>0.0093 ms</strong></td></tr>
+  </table>
+</div>
+
+<div class="callout key">
+  <span class="label">충격 포인트</span>
+  메모리: <strong>8.75 ms</strong> &nbsp;vs&nbsp; 계산: <strong>0.0093 ms</strong>.
+  메모리가 약 <strong>940배</strong> 느리다. 즉 GPU는 토큰 하나를 만드는 시간의 99.9%를
+  <em>“가중치를 끌어오길 기다리는 데”</em> 쓴다. 곱셈은 사실상 공짜다.
+  → 상한은 1초 ÷ 8.75ms ≈ <strong>약 114 tokens/sec</strong>. 대역폭이 이 벽을 정한다.
+</div>
+
+<p>
+이것이 <strong>메모리 바운드(memory-bound)</strong>다. 워크로드가 “바이트를 더 빨리 옮겨야만” 빨라지는 상태.
+반대로 “계산을 더 빨리 해야만” 빨라지면 <strong>컴퓨트 바운드</strong>. 배치 1 디코딩은 극단적으로 메모리 바운드다
+— <a href="../reference/glossary.html">연산 강도</a>가 약 1 FLOP/byte로, 대역폭의 벽에 딱 붙어 있기 때문이다<sup class="cite">[2]</sup>.
+</p>
+
+<h2>이 렌즈로 Sionic 글을 보면</h2>
+<p>
+이제 그 글의 숫자들이 말이 되기 시작한다. GLM-5.2는 <a href="../reference/glossary.html">MoE</a>라서 토큰마다
+전체 753B이 아니라 <em>활성화된 일부 전문가</em>의 가중치만 읽는다 — 글에서 말하는 <strong>토큰당 6.65 GB</strong>가
+바로 위 계산의 ①에 해당한다. 그리고 그들의 핵심 무기인 <strong>MTP</strong>는 “가중치를 한 번 읽고 토큰 여러 개를
+확정”해서 이 ① 값을 <strong>6.65 → 1.9 → 0.67 GB/토큰</strong>으로 끌어내린다<sup class="cite">[1]</sup>.
+①이 줄면 토큰당 시간이 줄고, 곧 tokens/sec가 오른다. <em>전부 같은 공식이다.</em>
+</p>
+
+<div class="quiz" data-answer="2">
+  <div class="q">배치 1 LLM 디코딩을 더 빠르게 만드는 가장 직접적인 방법은?</div>
+  <button class="opt">더 많은 FLOPs 성능을 가진 GPU를 산다</button>
+  <button class="opt">모델의 레이어 개수를 그대로 늘린다</button>
+  <button class="opt">토큰당 읽는 가중치 바이트 수를 줄인다</button>
+  <button class="opt">부동소수점 곱셈 회로를 더 정밀하게 만든다</button>
+  <div class="feedback"
+       data-correct="정확하다. 병목이 메모리이므로, 읽는 바이트를 줄이는 것(양자화·MoE·MTP)이 핵심이다."
+       data-wrong="다시 생각해 보자. 병목은 계산이 아니라 '가중치를 메모리에서 읽는 시간'이었다. 그 바이트를 줄여야 한다."></div>
+</div>
+
+<div class="callout">
+  <span class="label">스스로 확인 (retrieval practice)</span>
+  종이를 덮고 답해 보라: ⑴ “토큰당 시간 ≈ ___ ÷ ___” 공식은? ⑵ 위 예시에서 메모리가 계산보다 몇 배 느렸나?
+  ⑶ tokens/sec 상한을 올리는 두 가지 방향은? (막히면 아래 선생님에게 질문)
+</div>
+
+<h2>가장 먼저 읽을 자료 (primary source)</h2>
+<p>
+Pierre Lienhart, <a href="https://medium.com/@plienhar/llm-inference-series-5-dissecting-model-performance-6144aa93168f"><em>LLM Inference Series #5: Dissecting model performance</em></a>.
+오늘 배운 roofline·메모리 바운드를 그림과 함께 가장 명료하게 설명한 글. 이번 주 한 번 정독 추천.
+</p>
+
+<div class="ask">
+  🧑‍🏫 <strong>막히면 바로 물어보세요.</strong> 저는 당신의 선생님입니다. “FP8이 왜 1바이트야?”,
+  “배치를 키우면 어떻게 되는데?”, “roofline 그림 다시 그려줘” — 무엇이든 질문하면 그 자리에서 풀어드립니다.
+</div>
+
+<hr>
+<p class="refs"><strong>References</strong></p>
+<ol class="refs">
+  <li>[1] Sionic AI, <a href="https://blog.sionic.ai/glm-5-2-x10">GLM-5.2 를 단일 GPU에서 10배 빠르게</a>. (이 코스의 출발점)</li>
+  <li>[2] Yuan et al., <a href="https://arxiv.org/html/2402.16363v4">LLM Inference Unveiled: Survey and Roofline Model Insights</a>, arXiv:2402.16363.</li>
+</ol>
+
+<div class="lesson-nav">
+  <span>← (첫 레슨)</span>
+  <span><a href="../index.html">🏠 Hub</a> · <a href="../reference/glossary.html">Glossary</a> · Next: 트랜스포머 디코드 루프와 KV 캐시 (예정)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

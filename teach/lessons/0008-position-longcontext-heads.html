@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 8 — 순서·롱컨텍스트·헤드 특화</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .flow { font-family:"SF Mono",Menlo,monospace; font-size:0.8rem; background:#f8fafc; border:1px solid var(--rule); border-radius:8px; padding:0.9rem 1.1rem; margin:1rem 0; line-height:1.55; white-space:pre; overflow-x:auto; }
+  .vec { font-family:"SF Mono",Menlo,monospace; font-size:0.82rem; background:var(--code-bg); border:1px solid var(--rule); border-radius:8px; padding:0.8rem 1rem; margin:0.9rem 0; line-height:1.6; }
+  h2 .n { color:var(--accent); font-family:system-ui,sans-serif; font-size:0.9rem; margin-right:0.4rem; }
+  .heads { width:100%; border-collapse:collapse; font-size:0.9rem; margin:1rem 0; }
+  .heads th, .heads td { padding:0.45rem 0.6rem; border-bottom:1px solid var(--rule); text-align:left; }
+  .heads th { font-family:system-ui,sans-serif; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); }
+</style>
+</head>
+<body>
+
+<p class="kicker">Lesson 08 · Phase 1 · Foundations (심화)</p>
+<h1>순서 · 롱컨텍스트 · 헤드 특화</h1>
+<p class="subtitle">어텐션은 사실 순서를 모른다 — 그 빈틈을 메우는 위치 인코딩, 그것이 롱컨텍스트를 어렵게 만드는 방식, 그리고 헤드 특화가 실증된다는 증거.</p>
+
+<div class="callout key">
+  <span class="label">이번 레슨의 단 하나의 승리</span>
+  세 가지가 <strong>하나로 얽혀</strong> 있음을 이해한다: <strong>위치 인코딩(RoPE)</strong>이 순서를 주입하고,
+  그것이 <strong>롱컨텍스트</strong> 품질·메모리 한계를 만들며, <strong>특정 헤드</strong>들이 이 일을 실제로 수행한다.
+  <a href="0007-what-a-model-is-made-of.html">L7 §6(그것→동물)</a>의 자연스러운 후속.
+</div>
+
+<h2><span class="n">1</span>어텐션은 순서를 모른다 → 위치 인코딩</h2>
+<div class="callout">
+  <span class="label">충격 포인트</span>
+  바닐라 어텐션의 Q·K·V 계산엔 <strong>위치 개념이 없다.</strong> 그래서 어텐션에겐
+  <span class="mono">"동물 길"</span>과 <span class="mono">"길 동물"</span>이 <strong>똑같아 보인다</strong> (순열 불변, permutation-invariant).
+</div>
+<p>그러니 <strong>순서를 따로 주입</strong>해야 한다 — 이것이 <strong>위치 인코딩(positional encoding)</strong>:</p>
+<ul>
+  <li><strong>원조 트랜스포머</strong>: 사인/코사인 파형을 임베딩에 <em>더해서</em> 위치를 표시.</li>
+  <li><strong>요즘 표준 — RoPE (Rotary Position Embedding)</strong>: Q와 K 벡터를 <strong>위치에 비례한 각도만큼 회전</strong>시킨다.
+  그러면 내적 <span class="mono">Q·K</span>가 <strong>두 토큰의 상대 거리</strong>를 자연스럽게 반영한다.</li>
+</ul>
+<div class="vec">Q("그것")를 위치 12에서, K("동물")를 위치 3에서 회전
+   → 내적에 "9칸 떨어짐"이라는 상대 거리가 녹아든다
+   → "그것"이 <b>의미(생물다움)</b> + <b>위치(가까움)</b>를 함께 저울질</div>
+<p class="small">그래서 <a href="0007-what-a-model-is-made-of.html">L7 §6</a>의 대명사 해석은 의미뿐 아니라 위치(거리)도 고려한다. RoPE가 그 다리다.</p>
+
+<h2><span class="n">2</span>롱컨텍스트: 같은 메커니즘, 다른 품질</h2>
+<p>
+어텐션엔 거리 제한이 없다 — "그것"의 Query는 5토큰 앞이든 <strong>5,000토큰 앞이든</strong>
+<a href="0002-decode-loop-and-kv-cache.html">KV 캐시</a>의 모든 Key와 똑같이 내적한다. <em>원리상 거리는 무관하다.</em>
+그런데 실무에선 멀수록 품질이 떨어진다:
+</p>
+<table class="heads">
+  <tr><th>문제</th><th>내용</th></tr>
+  <tr><td>softmax 희석</td><td>후보가 수천 개면 어텐션 가중치가 얇게 퍼진다. 정답 Key가 어지간히 튀지 않으면 묻힌다.</td></tr>
+  <tr><td>lost in the middle</td><td>실측상 모델은 긴 문맥의 <strong>앞·뒤는 잘 보고 가운데는 잘 놓친다</strong><sup class="cite">[2]</sup>. 선행사가 중간이면 놓칠 확률↑.</td></tr>
+  <tr><td>학습 길이 초과</td><td>짧은 문맥으로 학습된 모델은 훈련 길이를 넘으면 급격히 무너진다 (RoPE가 미지의 먼 위치에서 깨짐).</td></tr>
+</table>
+<div class="callout key">
+  <span class="label">미션 연결</span>
+  롱컨텍스트 서빙은 <strong>메모리 문제</strong>(KV 캐시가 문맥 길이에 비례, L2/L4)이자 <strong>품질 문제</strong>(먼 선행사 놓침)다.
+  "128K 컨텍스트 지원"이 공짜가 아닌 이유. RoPE를 늘리는 <strong>position interpolation·YaRN</strong> 같은 기법이 컨텍스트 확장의 열쇠이자 병목이며,
+  Phase 3에서 실제 설정으로 만난다.
+</div>
+
+<h2><span class="n">3</span>"헤드마다 다른 가설"은 실증된다</h2>
+<p>
+<a href="0003-what-is-attention.html">L3</a>·<a href="0007-what-a-model-is-made-of.html">L7</a>에서 "헤드가 서로 다른 일을 한다"고 했는데, 이건 교육용 비유가 아니라
+<strong>mechanistic interpretability</strong> 연구가 실제로 발견한 것이다. 역할이 확인된 헤드들:
+</p>
+<table class="heads">
+  <tr><th>헤드 종류</th><th>하는 일</th></tr>
+  <tr><td>Induction head<sup class="cite">[3]</sup></td><td><span class="mono">[A][B]…[A]→[B]</span> 패턴 복사·완성. in-context learning의 핵심으로 지목.</td></tr>
+  <tr><td>Previous-token / Duplicate-token</td><td>바로 앞 토큰, 또는 앞서 나온 같은 토큰에 주목.</td></tr>
+  <tr><td>Name-mover head<sup class="cite">[4]</sup></td><td>우리 예시와 거의 같은 <strong>지시 대상 찾기</strong> 과제에서 정답 이름을 출력으로 실어 나름 (IOI 회로).</td></tr>
+  <tr><td>Syntactic / Positional</td><td>문법 의존관계, 또는 특정 위치에 주목.</td></tr>
+</table>
+<p class="small"><strong>측정법</strong>: 어텐션 패턴을 직접 보거나, 특정 헤드를 껐다 켜는 <strong>인과 개입(activation patching)</strong>으로 "이 헤드가 없으면 코어퍼런스가 깨진다"를 확인한다.</p>
+<div class="callout">
+  <span class="label">정직한 단서 (L7과 일관)</span>
+  모든 헤드가 깔끔히 해석되진 않는다 — 상당수는 여러 역할이 겹친(polysemantic) 분산 상태다.
+  하지만 <strong>"헤드가 서로 다른 일을 한다"는 주장 자체는 실증됐다.</strong>
+</div>
+
+<h2>셋을 하나로</h2>
+<div class="flow">어텐션은 순서를 모름 ── ③ 위치 인코딩(RoPE)으로 순서 주입
+                              │
+   대명사 해석 = 의미 방향 + 위치(거리) 정렬  (L7 §6 예시)
+                              │
+   ② 특정 헤드들(name-mover 등)이 그 정렬을 실제로 수행
+                              │
+   RoPE가 학습 길이 밖에서 깨짐 ── ① 롱컨텍스트 품질↓ (+ KV 캐시 메모리↑)</div>
+
+<div class="quiz" data-answer="2">
+  <div class="q">"바닐라 어텐션은 순서를 모른다"가 뜻하는 것은?</div>
+  <button class="opt">KV 캐시가 없으면 과거 토큰을 못 본다는 뜻</button>
+  <button class="opt">토큰이 많으면 계산이 느려진다는 뜻</button>
+  <button class="opt">위치 정보를 안 주면 "동물 길"과 "길 동물"을 구분 못 한다는 뜻</button>
+  <button class="opt">헤드가 하나뿐이면 문맥을 못 본다는 뜻</button>
+  <div class="feedback"
+       data-correct="정확하다. Q·K·V 자체엔 위치 개념이 없어 순열 불변이다. 그래서 RoPE 등으로 순서를 따로 주입한다."
+       data-wrong="핵심은 '순열 불변'이다. 위치 정보를 주입하지 않으면 어순이 다른 문장을 구분하지 못한다."></div>
+</div>
+
+<div class="callout">
+  <span class="label">스스로 확인 (retrieval practice)</span>
+  종이를 덮고: ⑴ RoPE가 Q·K에 심어 넣는 것은? ⑵ 롱컨텍스트에서 품질이 떨어지는 이유 두 가지?
+  ⑶ 헤드 특화를 실증하는 실험 기법 이름은? &nbsp;+ <em>복습:</em> "그것→동물"은 무엇의 정렬로 생기나?(L7 §6)
+</div>
+
+<h2>가장 먼저 읽을 자료 (primary source)</h2>
+<p>
+Su et al., <a href="https://arxiv.org/abs/2104.09864"><em>RoFormer: RoPE</em></a> (위치 회전) ·
+Liu et al., <a href="https://arxiv.org/abs/2307.03172"><em>Lost in the Middle</em></a> (롱컨텍스트 실측) ·
+Olsson et al., <a href="https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html"><em>In-context Learning and Induction Heads</em></a> (헤드 특화).
+</p>
+
+<div class="ask">
+  🧑‍🏫 <strong>막히면 바로 물어보세요.</strong> "YaRN이 RoPE를 어떻게 늘려?", "lost in the middle는 왜 생겨?",
+  "activation patching이 정확히 뭐야?", "sinusoidal이랑 RoPE 중 왜 RoPE가 이겼어?"
+</div>
+
+<hr>
+<p class="refs"><strong>References</strong></p>
+<ol class="refs">
+  <li>[1] (개념 종합) 본 코스 L3·L7.</li>
+  <li>[2] Liu et al., <a href="https://arxiv.org/abs/2307.03172">Lost in the Middle: How Language Models Use Long Contexts</a>, 2023.</li>
+  <li>[3] Olsson et al., <a href="https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html">In-context Learning and Induction Heads</a>, Anthropic 2022.</li>
+  <li>[4] Wang et al., <a href="https://arxiv.org/abs/2211.00593">Interpretability in the Wild (IOI circuit)</a>, 2022.</li>
+  <li>[5] Su et al., <a href="https://arxiv.org/abs/2104.09864">RoFormer: Rotary Position Embedding</a>, 2021.</li>
+</ol>
+
+<div class="lesson-nav">
+  <span><a href="0007-what-a-model-is-made-of.html">← Lesson 7 (모델은 숫자다)</a></span>
+  <span><a href="../index.html">🏠 Hub</a> · <a href="../reference/glossary.html">Glossary</a> · Next: MTP / Speculative decoding (예정)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

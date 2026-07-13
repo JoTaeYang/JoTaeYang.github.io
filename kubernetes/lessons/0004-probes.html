@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0004 — readiness 는 과녁에서 빼고, liveness 는 재시작한다</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0004 <span class="tag">Level 1→3 · 실습</span></p>
+<h1>readiness 는 과녁에서 빼고, liveness 는 재시작한다</h1>
+<p class="subtitle">진단에서 틀린 그 문제. 두 probe 의 차이를 EndpointSlice 와 RESTARTS 숫자로 직접 확인한다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> readiness 실패와 liveness 실패의 결과가 <em>완전히 다른 곳</em>에
+나타나는 것을 관찰하고, 어떤 상황에 어떤 probe 를 써야 하는지 판단할 수 있다.
+그리고 처음으로 YAML 매니페스트를 직접 적용한다.
+</div>
+
+<h2>1. 두 probe, 두 명의 감독관</h2>
+
+<p>kubelet 은 컨테이너마다 두 가지 질문을 반복해서 던질 수 있다:</p>
+
+<table class="cmp">
+<tr><th></th><th>질문</th><th>실패하면</th><th>결과가 보이는 곳</th></tr>
+<tr>
+  <td><b>readiness</b></td>
+  <td>"지금 트래픽 받을 준비 됐어?"</td>
+  <td>Service 과녁에서 <b>제외</b> (재시작 없음)</td>
+  <td>EndpointSlice, <code>READY 0/1</code></td>
+</tr>
+<tr>
+  <td><b>liveness</b></td>
+  <td>"아직 살아는 있어?"</td>
+  <td>컨테이너 <b>재시작</b></td>
+  <td><code>RESTARTS</code> 카운트, Events</td>
+</tr>
+</table>
+
+<div class="aha">
+<span class="label">아하</span>
+레슨 0003 에서 "EndpointSlice 에는 <em>Ready 상태</em> Pod 만 실린다"고 했다 —
+그 Ready 를 결정하는 게 바로 readiness probe 다. 두 레슨이 여기서 만난다:
+readiness 는 Service 층의 문제(과녁 목록), liveness 는 컨테이너 층의 문제(생사).
+층이 다르니 결과도 다르다.
+</div>
+
+<h2>2. 실습 — 같은 실패, 다른 운명</h2>
+
+<div class="note">
+kind 클러스터(<code>mastery</code>)와 레슨 0003 의 <code>web</code> Service 를 그대로 쓴다.
+이번엔 <code>kubectl create</code> 가 아니라 <b>YAML 파일을 직접 적용</b>한다 — CKAD 로 가는 첫 걸음.
+</div>
+
+<p><b>추적 1 — readiness: 준비 안 된 Pod 는 과녁에 안 실린다.</b>
+아래를 <code>ready-demo.yaml</code> 로 저장하고 적용하라:</p>
+
+<div class="cluster"><span class="ctx">ready-demo.yaml</span>
+<span class="out">apiVersion: v1
+kind: Pod
+metadata:
+  name: ready-demo
+  labels:
+    app: web          <span class="hl"># ← web Service 의 selector 에 걸린다!</span>
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    readinessProbe:
+      exec:
+        command: ["cat", "/tmp/ready"]   # 파일이 있어야 Ready
+      periodSeconds: 2</span>
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f ready-demo.yaml && kubectl get pod ready-demo -w</span>
+<span class="out">NAME         READY   STATUS    RESTARTS
+ready-demo   <span class="hl">0/1</span>     Running   0        ← Running 인데 Ready 가 아니다! (Ctrl-C)</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get endpointslices -l kubernetes.io/service-name=web</span>
+<span class="out">ENDPOINTS: 기존 web Pod 3개의 IP 뿐 — ready-demo 는 라벨이 맞아도 <span class="hl">목록에 없다</span></span>
+</div>
+
+<p>이제 준비됐다고 알려주자:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl exec ready-demo -- touch /tmp/ready</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pod ready-demo && kubectl get endpointslices -l kubernetes.io/service-name=web</span>
+<span class="out">ready-demo   <span class="hl">1/1</span>   Running   0   ← Ready!
+ENDPOINTS 에 ready-demo 의 IP 가 <span class="hl">추가</span>되었다 (이제 과녁 4개)</span>
+</div>
+
+<p>거꾸로 <code>kubectl exec ready-demo -- rm /tmp/ready</code> 하면 몇 초 안에 다시 과녁에서 빠진다.
+<b>RESTARTS 는 끝까지 0</b> — readiness 는 절대 재시작시키지 않는다.</p>
+
+<p><b>추적 2 — liveness: 죽었다고 판정되면 재시작된다.</b> <code>live-demo.yaml</code>:</p>
+
+<div class="cluster"><span class="ctx">live-demo.yaml</span>
+<span class="out">apiVersion: v1
+kind: Pod
+metadata:
+  name: live-demo
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.27
+    livenessProbe:
+      exec:
+        command: ["cat", "/tmp/alive"]
+      initialDelaySeconds: 5
+      periodSeconds: 2</span>
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl apply -f live-demo.yaml && kubectl get pod live-demo -w</span>
+<span class="out">live-demo   1/1   Running   0
+live-demo   1/1   Running   <span class="hl">1</span>     ← /tmp/alive 가 없으니 곧 재시작!
+live-demo   1/1   Running   <span class="hl">2</span>     ← 그리고 또... (Ctrl-C)</span>
+<span class="prompt">$</span> <span class="cmd">kubectl describe pod live-demo | grep -A3 Events | tail -5</span>
+<span class="out">Warning  Unhealthy  Liveness probe failed: cat: /tmp/alive: No such file or directory
+Normal   Killing    Container nginx failed liveness probe, will be restarted</span>
+</div>
+
+<p><code>kubectl exec live-demo -- touch /tmp/alive</code> 로 파일을 만들어 주면 재시작이 멈춘다
+(재시작 직후 타이밍이면 한 번 더 걸릴 수 있다 — 그것도 관찰거리다).</p>
+
+<div class="warn">
+<b>실무 함정:</b> liveness 에 DB 연결 같은 <em>외부 의존성</em>을 넣으면, DB 장애 때
+멀쩡한 앱 컨테이너들이 전부 재시작 폭풍에 빠진다. liveness 는 "프로세스가 회복 불능인가"만,
+외부 준비 상태는 readiness 로. <a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/">공식 문서의 주의사항</a> 참고.
+</div>
+
+<p>정리: <code>kubectl delete pod ready-demo live-demo</code></p>
+
+<h2>3. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. 배포 직후 앱이 워밍업(캐시 로딩)에 30초 걸린다. 그동안 트래픽만 안 받으면 된다. 어떤 probe 인가?</p>
+  <div class="opts">
+    <button class="opt">livenessProbe — 워밍업 실패는 곧 비정상이므로 재시작이 맞다</button>
+    <button class="opt" data-correct="true">readinessProbe — 재시작 없이 과녁에서만 빠져 있으면 된다</button>
+    <button class="opt">둘 다 필요 없다 — initialDelaySeconds 로 30초 기다리면 된다</button>
+  </div>
+  <div class="explain">워밍업은 정상 과정이지 죽은 게 아니다. liveness 로 걸면 워밍업 중 재시작 → 다시 워밍업 → 무한 루프. 진단 Q5 의 함정이 정확히 이것이었다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. 추적 1 에서 ready-demo 가 EndpointSlice 에 없었던 이유는?</p>
+  <div class="opts">
+    <button class="opt">web Deployment 소유가 아니어서 ownerReferences 검사에 탈락했다</button>
+    <button class="opt" data-correct="true">라벨은 selector 에 걸렸지만 Ready 조건을 만족하지 못했다</button>
+    <button class="opt">kubectl expose 이후 만들어진 Pod 는 수동 등록이 필요하다</button>
+  </div>
+  <div class="explain">EndpointSlice 는 selector 일치 <b>그리고</b> Ready, 두 조건이다. 그리고 소유와 무관하게 라벨만 맞으면 어떤 Pod 든 과녁이 된다는 것도 확인했다 — Service 는 소유 체인 밖(레슨 0003).</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0002–0003 종합 복습) 배포한 앱에 연결이 안 된다. <code>kubectl describe svc web</code> 의 Endpoints 가 비어 있다. 가능한 원인 둘은?</p>
+  <div class="opts">
+    <button class="opt" data-correct="true">selector 와 Pod 라벨 불일치, 또는 readiness probe 실패</button>
+    <button class="opt">ClusterIP 고갈, 또는 옛 ReplicaSet 이 0 으로 남아 있음</button>
+    <button class="opt">DNS 이름 오타, 또는 rollout undo 를 하지 않아서</button>
+  </div>
+  <div class="explain">빈 Endpoints 의 2대 원인 = "과녁에 안 걸림(라벨)" 또는 "걸렸지만 Ready 아님(probe)". 레슨 0003 warning + 이번 레슨이 합쳐진, 실기 시험 그대로의 디버깅 체크리스트다.</div>
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">실습하다 떠오르는 "어? 이건 왜 이러지?"를 미리 모았다. 궁금한 것만 펼쳐 보면 된다 — 안 궁금하면 접힌 채 넘어가도 된다.</p>
+
+<details class="faq">
+<summary>readiness 랑 liveness, 둘 다 꼭 넣어야 하나요?</summary>
+<div class="a"><p>아니다 — 필요한 것만 넣으면 된다. 워밍업/외부 의존성이 있어 "준비 상태"가 흔들리는 앱이면 readiness, 데드락처럼 프로세스가 스스로 회복 못 하는 경우가 있으면 liveness. 둘의 목적이 아예 다르니(과녁 제외 vs 재시작) "둘 다 없어도 되는가"부터 판단하는 게 맞다.</p></div>
+</details>
+
+<details class="faq">
+<summary>probe 를 아예 안 넣으면 어떻게 되나요?</summary>
+<div class="a"><p>기본값은 "항상 통과"다 — 컨테이너 프로세스가 살아만 있으면 Ready 로 치고, kubelet 은 재시작을 안 시킨다. 그래서 워밍업 중인 앱한테도 트래픽이 바로 꽂히고(readiness 없음), 데드락에 걸려 멈춘 앱도 영영 안 고쳐진다(liveness 없음). "괜찮아 보이는데 왜 오류가?"의 흔한 뿌리다.</p></div>
+</details>
+
+<details class="faq">
+<summary>추적 1 에서 <code>STATUS</code> 는 <code>Running</code> 인데 <code>READY</code> 가 <code>0/1</code> 이에요. 모순 아닌가요?</summary>
+<div class="a"><p>아니다 — 다른 층의 얘기다. <code>STATUS: Running</code> 은 "컨테이너 프로세스가 떠 있다", <code>READY 0/1</code> 은 "readiness probe 를 아직 통과 못 해 트래픽 받을 준비가 안 됐다"다. 프로세스는 살아 있지만 준비는 안 된 상태 — 그래서 EndpointSlice 과녁에서 빠져 있는 것이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>readiness 가 실패하는 동안 Pod 는 그냥 방치되나요?</summary>
+<div class="a"><p>재시작은 안 되지만 방치는 아니다 — kubelet 이 <code>periodSeconds</code> 간격으로 계속 다시 물어본다. 준비되면(추적 1 에서 <code>touch /tmp/ready</code>) 몇 초 안에 자동으로 <code>1/1</code> 이 되고 과녁에 다시 실린다. readiness 는 "지금 상태"를 계속 갱신하는 스위치이지 일회성 판정이 아니다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>RESTARTS</code> 숫자가 계속 오르는데 정상인가요?</summary>
+<div class="a"><p>정상이 아니다 — liveness probe 가 계속 실패해 컨테이너를 반복 재시작한다는 신호다(추적 2 가 정확히 이 그림). <code>kubectl describe pod</code> 의 Events 에서 <code>Unhealthy</code>/<code>Killing</code> 을 보면 원인이 나온다. 참고로 readiness 실패로는 <code>RESTARTS</code> 가 절대 안 오른다 — 숫자가 오르면 범인은 항상 liveness(또는 크래시) 쪽이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>왜 liveness 에 DB 체크를 넣으면 안 되나요?</summary>
+<div class="a"><p>liveness 실패 = 재시작인데, DB 가 죽으면 <em>멀쩡한</em> 앱 컨테이너 전부가 동시에 재시작 폭풍에 빠지기 때문이다(실습 함정 박스). 재시작해도 DB 는 여전히 죽어 있으니 아무것도 안 고쳐지고 상황만 악화된다. 외부 의존성은 readiness(과녁에서만 빠짐), liveness 는 "이 프로세스 자체가 회복 불능인가"만.</p></div>
+</details>
+
+<details class="faq">
+<summary>그럼 DB 연결 확인은 어느 probe 에 넣어요?</summary>
+<div class="a"><p>readiness 다. DB 가 끊기면 그 Pod 만 조용히 과녁에서 빠지고(트래픽 안 받음), DB 가 돌아오면 자동으로 다시 실린다 — 재시작 없이. 앞 질문과 짝으로 외우면 좋다: <b>외부 의존성 = readiness, 프로세스 생사 = liveness.</b></p></div>
+</details>
+
+<details class="faq">
+<summary><code>exec</code> probe 말고 다른 방식도 있나요?</summary>
+<div class="a"><p>있다 — <code>httpGet</code>(엔드포인트에 GET, 2xx/3xx 면 성공), <code>tcpSocket</code>(포트가 열려 있으면 성공), 그리고 오늘 쓴 <code>exec</code>(명령의 종료코드 0 이면 성공). 웹 앱은 보통 <code>httpGet /healthz</code> 를 쓴다. 실습에서 파일 존재 여부로 실패를 껐다 켰다 하려고 <code>exec cat</code> 을 골랐을 뿐이다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>startupProbe</code> 는 언제 쓰나요?</summary>
+<div class="a"><p>부팅이 <em>느린</em> 앱(레거시 JVM 등)에서, 뜨는 동안 liveness 가 성급히 죽이는 걸 막을 때 쓴다. startupProbe 가 통과하기 전까지는 liveness/readiness 를 아예 잠가 둔다 — "일단 다 뜰 때까지 기다려" 담당이다. <code>initialDelaySeconds</code> 를 크게 잡는 것보다 깔끔하다. 세부는 오늘 안 다뤘고 CKAD 재료다.</p></div>
+</details>
+
+<details class="faq">
+<summary>이번엔 왜 <code>kubectl create</code> 대신 YAML 파일을 쓰나요?</summary>
+<div class="a"><p>probe 처럼 중첩이 깊은 설정은 명령어 플래그로 표현하기 힘들고, 무엇보다 실무·시험에서 리소스는 대부분 <b>매니페스트(YAML)</b>로 관리하기 때문이다. 파일로 두면 버전 관리·재적용·리뷰가 된다. CKAD 는 사실상 YAML 을 빠르게 쓰고 <code>apply</code> 하는 시험이라, 오늘이 그 첫 걸음이다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>periodSeconds</code>, <code>initialDelaySeconds</code> 는 무슨 차이예요?</summary>
+<div class="a"><p><code>initialDelaySeconds</code> 는 "컨테이너 시작 후 첫 검사까지 기다리는 시간"(추적 2 에서 5초), <code>periodSeconds</code> 는 "그 다음부터 몇 초 간격으로 반복하나"(2초)다. 여기에 <code>failureThreshold</code>(몇 번 연속 실패해야 실패로 판정)까지 조합해 민감도를 조절한다. 너무 촘촘하면 예민하고, 너무 느슨하면 장애 감지가 늦는다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/">공식 문서: Configure Liveness, Readiness and Startup Probes</a> —
+오늘 안 다룬 세 번째 probe(<b>startupProbe</b>: 느리게 뜨는 앱 전용)와 httpGet/tcpSocket 방식까지 여기 있다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "-w 출력이 레슨과 다르다", "startupProbe 는 언제 쓰나",
+"periodSeconds/failureThreshold 조합은?" — 전부 다음 레슨의 재료가 된다.
+</div>
+
+<nav class="nav">
+  <a href="0003-service-and-endpoints.html">← 0003 Service 와 EndpointSlice</a>
+  <a href="../reference/roadmap.html">성장 로드맵</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

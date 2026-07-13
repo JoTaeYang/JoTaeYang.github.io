@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 4 — 배칭: 처리량 vs 메모리</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<p class="kicker">Lesson 04 · Phase 1 — The Workload</p>
+<h1>배칭: 처리량 vs 메모리의 줄다리기</h1>
+<p class="subtitle">가중치를 한 번 읽어 여러 사용자의 토큰을 동시에 만든다. 서빙 처리량을 끌어올리는 가장 큰 지렛대 — 그리고 KV 캐시가 그 지렛대를 어디서 멈추는가.</p>
+
+<div class="callout key">
+  <span class="label">이번 레슨의 단 하나의 승리</span>
+  <strong>배칭이 왜 처리량을 몇십 배 올리는지</strong>를 Lesson 1의 공식으로 직접 계산하고,
+  <strong>KV 캐시가 그 상한을 어떻게 정하는지</strong>, 그리고 실무 표준인 <strong>연속 배칭(continuous batching)</strong>이
+  뭘 해결하는지 이해한다.
+</div>
+
+<h2>Lesson 1이 남긴 낭비</h2>
+<p>
+Lesson 1에서 배치 1은 처참했다: 가중치 70 GB를 통째로 읽어(<strong>8.75 ms</strong>) 토큰을 <strong>딱 1개</strong> 만들었다.
+읽어온 가중치는 그 토큰 하나 만들고 버려진다. 계산 유닛은 99.9%를 놀았다(<a href="0001-why-inference-is-memory-bound.html">기억나죠?</a>).
+<strong>같은 가중치를 이미 읽어놨는데, 왜 한 명한테만 쓰나?</strong>
+</p>
+
+<h2>핵심 아이디어: 가중치 읽기를 나눠 쓴다</h2>
+<p>
+사용자 32명의 요청을 <strong>한 배치로 묶으면</strong>, 가중치를 <em>한 번</em> 읽어서 32명의 다음 토큰을 <em>동시에</em> 계산한다.
+읽어온 바이트(비싼 것)를 32명이 나눠 쓰니, <strong>토큰당 메모리 비용이 1/32로</strong> 떨어진다.
+</p>
+
+<div class="calc">
+  <table>
+    <tr><td>가중치 1회 읽기 시간 (70 GB ÷ 8 TB/s)</td><td>8.75 ms</td></tr>
+    <tr><td>배치 1 → 그 시간에 만든 토큰</td><td>1개 → <strong>≈ 114 tok/s</strong></td></tr>
+    <tr class="result"><td>배치 32 → 같은 1회 읽기로</td><td>32개 → <strong>≈ 3,650 tok/s</strong> (총 처리량)</td></tr>
+  </table>
+</div>
+
+<div class="callout">
+  <span class="label">중요한 구분</span>
+  이때 <strong>사용자 한 명이 체감하는 속도(≈114 tok/s)는 거의 그대로</strong>다. 늘어난 건 <strong>전체 처리량(throughput)</strong> — 시스템이 초당 뽑는 총 토큰 수.
+  서빙에서 <em>비용/사용자</em>를 결정하는 건 이 처리량이다. 배칭은 <strong>지연은 유지하면서 처리량을 키우는</strong> 지렛대.
+</div>
+
+<p class="small">※ 단순화: 배치를 키우면 KV 캐시 읽기와 계산량도 함께 늘어, 어느 지점부터는 처리량 증가가 꺾이고(컴퓨트 바운드로 전환) 사용자 지연도 조금씩 는다. 하지만 "가중치 읽기를 나눠 쓴다"가 이득의 본질이다.</p>
+
+<h2>그럼 배치를 무한히 키우면 되나? — 벽은 KV 캐시</h2>
+<p>
+안 된다. <a href="0002-decode-loop-and-kv-cache.html">Lesson 2</a>에서 봤듯 <strong>KV 캐시는 배치 크기 × 문맥 길이에 비례</strong>해 커진다.
+GPU 메모리는 유한하다:
+</p>
+
+<div class="calc">
+  <table>
+    <tr><td>GPU 메모리 (예: B300 급)</td><td>≈ 190 GB</td></tr>
+    <tr><td>− 가중치 (고정)</td><td>70 GB</td></tr>
+    <tr class="result"><td>= KV 캐시에 쓸 수 있는 공간</td><td>≈ 120 GB</td></tr>
+  </table>
+</div>
+<p>
+사용자당 3.2 GB(문맥 10K)라면 → <strong>120 ÷ 3.2 ≈ 37명이 배치 상한</strong>. 이걸 넘기면 OOM(메모리 부족)이다.
+</p>
+
+<div class="callout key">
+  <span class="label">서빙 최적화의 핵심 긴장</span>
+  <strong>배치 ↑ → 처리량 ↑ (좋음)</strong> &nbsp;하지만&nbsp; <strong>배치 ↑ → KV 캐시 ↑ → 메모리 벽 (한계)</strong>.
+  이 줄다리기가 LLM 서빙의 중심 문제다. 그래서 <strong>KV 캐시를 줄이는 모든 기법</strong>(GQA·양자화·PagedAttention)이
+  곧바로 <em>“배치를 더 키울 여력 = 처리량”</em>으로 환산된다.
+</div>
+
+<h2>정적 배칭의 함정, 그리고 연속 배칭</h2>
+<p>
+순진하게 구현하면(<strong>정적 배칭</strong>) 문제가 있다. 32명을 묶었는데 누구는 답이 10토큰, 누구는 500토큰이다.
+짧게 끝난 사용자의 <strong>슬롯은 배치 전체가 끝날 때까지 빈 채로 낭비</strong>된다 — GPU가 놀게 된다.
+</p>
+<p>
+<strong>연속 배칭(continuous batching)</strong>은 이걸 <em>토큰 단위(iteration-level)</em>로 해결한다: 한 사용자가 끝나면
+<strong>그 슬롯에 대기 중인 새 요청을 즉시 밀어 넣는다</strong>. 배치가 항상 꽉 찬 상태로 유지돼 GPU가 놀지 않는다.
+결과: 정적 배칭 대비 <strong>2~4배</strong> 처리량, 긴 요청이 짧은 요청을 막지 않아 꼬리 지연(p95/p99)도 개선<sup class="cite">[1]</sup>.
+vLLM·SGLang 같은 실무 서빙 엔진의 기본 동작이다.
+</p>
+<p class="small">
+주의(caveat): 새 요청이 배치에 들어오는 순간의 <strong>프리필</strong>은 계산을 크게 잡아먹어, 진행 중이던 디코드를 잠깐 지연시킨다
+(“prefill stalling”). 그래서 최신 엔진은 프리필을 잘게 쪼개 섞는다(chunked prefill) — Phase 3에서 다룬다<sup class="cite">[1]</sup>.
+</p>
+
+<h2>Sionic 글과의 연결</h2>
+<p>
+이제 그 글이 왜 배칭·KV·양자화를 한꺼번에 물고 늘어지는지 보인다. 그들은 단일 GPU 처리량을 짜내려고
+<strong>배치를 키우고(처리량)</strong>, 그 대가인 <strong>KV/가중치 메모리를 양자화로 줄이고(FP8/FP4)</strong>,
+그렇게 확보한 여력 위에서 <strong>커널을 최적화</strong>한다. 전부 이 레슨의 줄다리기 위에서 벌어지는 일이다.
+</p>
+
+<div class="quiz" data-answer="1">
+  <div class="q">배칭이 처리량을 크게 올리는 근본 이유는?</div>
+  <button class="opt">사용자 한 명의 토큰 생성 속도를 직접 높여서</button>
+  <button class="opt">한 번 읽은 가중치를 여러 사용자가 나눠 써서</button>
+  <button class="opt">KV 캐시를 아예 사용하지 않게 되어서</button>
+  <button class="opt">프리필 단계를 건너뛸 수 있게 되어서</button>
+  <div class="feedback"
+       data-correct="정확하다. 비싼 것(가중치 읽기)을 N명이 분담해 토큰당 메모리 비용이 1/N로 준다. 개인 속도가 아니라 총 처리량이 오른다."
+       data-wrong="다시 보자. 개인 속도는 거의 그대로다. 이득은 '한 번의 가중치 읽기를 여러 사용자가 공유'하는 데서 온다."></div>
+</div>
+
+<div class="callout">
+  <span class="label">스스로 확인 (retrieval practice)</span>
+  종이를 덮고: ⑴ 배칭이 올리는 건 개인 지연인가 총 처리량인가? ⑵ 배치 크기의 상한을 정하는 것은?
+  ⑶ 연속 배칭이 정적 배칭 대비 해결하는 낭비는? &nbsp;+ <em>복습:</em> 배치 1에서 계산 유닛이 논 이유는?(L1)
+</div>
+
+<h2>가장 먼저 읽을 자료 (primary source)</h2>
+<p>
+Anyscale, <a href="https://www.anyscale.com/blog/continuous-batching-llm-inference"><em>Achieve 23x LLM Inference Throughput &amp; Reduce p50 Latency</em></a> —
+연속 배칭을 그림과 벤치마크로 설명한 대표 글. 더 넓게는
+<a href="https://bentoml.com/llm/inference-optimization/static-dynamic-continuous-batching">BentoML, <em>Static/Dynamic/Continuous Batching</em></a>.
+</p>
+
+<div class="ask">
+  🧑‍🏫 <strong>막히면 바로 물어보세요.</strong> “PagedAttention이 KV 낭비를 어떻게 줄여?”,
+  “처리량이랑 지연 중 뭘 우선해야 해?”, “chunked prefill이 뭐야?”, “배치 키우면 왜 결국 compute-bound가 돼?”
+</div>
+
+<hr>
+<p class="refs"><strong>References</strong></p>
+<ol class="refs">
+  <li>[1] Anyscale, <a href="https://www.anyscale.com/blog/continuous-batching-llm-inference">Continuous batching for LLM inference (23x throughput)</a>.</li>
+  <li>[2] BentoML, <a href="https://bentoml.com/llm/inference-optimization/static-dynamic-continuous-batching">Static, dynamic and continuous batching</a>.</li>
+</ol>
+
+<div class="lesson-nav">
+  <span><a href="0003-what-is-attention.html">← Lesson 3 (어텐션)</a></span>
+  <span><a href="../index.html">🏠 Hub</a> · <a href="../reference/glossary.html">Glossary</a> · Phase 1 마무리 → Phase 2: 양자화 (예정)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM 추론 최적화 — 코스 허브</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .phase { margin: 2.2rem 0; }
+  .phase h2 { margin-bottom: 0.2rem; }
+  .phase .goal { color: var(--muted); font-size: 0.92rem; margin: 0 0 0.8rem; }
+  ol.lessons { list-style: none; padding: 0; margin: 0; }
+  ol.lessons li { display: flex; gap: 0.9rem; align-items: baseline; padding: 0.55rem 0.2rem; border-bottom: 1px solid var(--rule); }
+  ol.lessons .num { font-family: "SF Mono", Menlo, monospace; font-size: 0.78rem; color: var(--accent); min-width: 2.2rem; }
+  ol.lessons .what { color: var(--muted); font-size: 0.88rem; }
+  ol.lessons li.todo { color: var(--muted); }
+  ol.lessons li.todo .num { color: var(--muted); }
+  .status { font-family: system-ui, sans-serif; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .status.done { color: var(--good); }
+  .status.next { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<p class="kicker">Course Hub</p>
+<h1>LLM 추론 최적화 — Zero부터 CUDA 커널까지</h1>
+<p class="subtitle">미션: 실무 LLM 추론 서빙/최적화. 촉매: Sionic의 <a href="https://blog.sionic.ai/glm-5-2-x10">GLM-5.2 x10</a> 글을 처음부터 끝까지 스스로 읽어내기.</p>
+
+<div class="callout key">
+  <span class="label">코스를 관통하는 한 문장</span>
+  토큰 하나의 비용은 곱셈이 아니라 <strong>가중치를 메모리에서 끌어오는 시간</strong>이다 —
+  배칭·양자화·MTP·커널, 전부 이 읽기 비용을 줄이거나 나눠 쓰는 방법이다.
+</div>
+
+<div class="phase">
+  <h2>Phase 0 — 멘탈 모델 <span class="status done">✓ 완료</span></h2>
+  <p class="goal">모든 최적화를 읽어낼 단 하나의 공식.</p>
+  <ol class="lessons">
+    <li><span class="num">L1</span><span><a href="lessons/0001-why-inference-is-memory-bound.html">왜 LLM 추론은 '메모리' 문제인가</a></span><span class="what">— 메모리 바운드, 940배, 상한 ~114 tok/s</span></li>
+  </ol>
+</div>
+
+<div class="phase">
+  <h2>Phase 1 — 워크로드 <span class="status done">✓ 완료</span></h2>
+  <p class="goal">디코드 루프가 실제로 뭘 하는지: 서빙 처리량을 스스로 추론하는 틀.</p>
+  <ol class="lessons">
+    <li><span class="num">L2</span><span><a href="lessons/0002-decode-loop-and-kv-cache.html">디코드 루프와 KV 캐시</a></span><span class="what">— prefill vs decode, 두 번째 메모리 병목</span></li>
+    <li><span class="num">L3</span><span><a href="lessons/0003-what-is-attention.html">어텐션이란 무엇인가</a></span><span class="what">— Q·K·V, 모든 최적화 문제의 뿌리</span></li>
+    <li><span class="num">L4</span><span><a href="lessons/0004-batching-throughput-vs-memory.html">배칭: 처리량 vs 메모리</a></span><span class="what">— 읽기 1회를 N명이 분담, KV 캐시가 상한</span></li>
+    <li><span class="num">L5</span><span><a href="lessons/0005-chunked-prefill-scheduling.html">Prefill 스케줄링과 Chunked Prefill</a></span><span class="what">— stalling, 유저 A·B 타임라인, OS/SMT 비유</span></li>
+  </ol>
+</div>
+
+<div class="phase">
+  <h2>Foundations — 개념의 바닥 (곁가지 심화) <span class="status done">✓ 완료</span></h2>
+  <p class="goal">질문에서 태어난 레슨들 — 블랙박스를 남기지 않는다.</p>
+  <ol class="lessons">
+    <li><span class="num">L7</span><span><a href="lessons/0007-what-a-model-is-made-of.html">모델은 결국 숫자다: 파라미터·레이어·임베딩</a></span><span class="what">— 파라미터당 바이트, 벡터, "그것"→"동물"</span></li>
+    <li><span class="num">L8</span><span><a href="lessons/0008-position-longcontext-heads.html">순서 · 롱컨텍스트 · 헤드 특화</a></span><span class="what">— RoPE, lost-in-the-middle, induction head</span></li>
+  </ol>
+</div>
+
+<div class="phase">
+  <h2>Phase 2 — 조절 손잡이 <span class="status next">◉ 진행 중</span></h2>
+  <p class="goal">읽는 바이트 자체를 줄이는 레버들 — Sionic 글의 심장.</p>
+  <ol class="lessons">
+    <li><span class="num">L6</span><span><a href="lessons/0006-quantization.html">양자화 (FP16 → FP8 → FP4)</a></span><span class="what">— 파라미터당 바이트↓, double win, 정확도 대가</span></li>
+    <li><span class="num">L9</span><span><a href="lessons/0009-speculative-decoding-mtp.html">MTP / Speculative Decoding</a></span><span class="what">— 읽기 1회로 토큰 여러 개, 6.65→0.67 GB/토큰</span></li>
+    <li class="todo"><span class="num">L11</span><span>MoE (예정)</span><span class="what">— 753B 중 일부만 활성, 6.65 GB/pass의 출처</span></li>
+  </ol>
+</div>
+
+<div class="phase">
+  <h2>Phase 3 — 서빙 스택 <span class="status next">◉ 진행 중 · 실습형</span></h2>
+  <p class="goal">vLLM/SGLang을 실제 GPU에서: tok/s 측정, FP8 vs FP16, KV OOM 재현, CUDA graph.</p>
+  <ol class="lessons">
+    <li><span class="num">L10</span><span><a href="lessons/0010-vllm-engine-args.html">vLLM 엔진 파라미터</a></span><span class="what">— 배운 개념이 플래그가 된다: KV 예산, 스케줄러, -q, speculative-config</span></li>
+  </ol>
+</div>
+
+<div class="phase">
+  <h2>Phase 4 — GPU 구조와 CUDA 커널 <span class="status">예정</span></h2>
+  <p class="goal">직접 커널을 쓴다 — tcgen05, 커널 퓨전. 이후 캡스톤: Sionic 글 완독.</p>
+</div>
+
+<hr>
+
+<h2>참고 자료</h2>
+<ol class="lessons">
+  <li><span class="num">📖</span><span><a href="reference/glossary.html">용어집 (Glossary)</a></span><span class="what">— 코스의 공식 정의; 레슨과 다르면 그게 버그</span></li>
+  <li><span class="num">📄</span><span><a href="reference/vllm-params.html">vLLM 파라미터 치트시트</a></span><span class="what">— 플래그별 역할 + 증상→용의자 표</span></li>
+  <li><span class="num">📄</span><span><a href="MISSION.md">MISSION.md</a> · <a href="RESOURCES.md">RESOURCES.md</a> · <a href="NOTES.md">NOTES.md</a></span><span class="what">— 로드맵 · 자료 목록 · 티칭 노트 (plain text)</span></li>
+</ol>
+
+<div class="ask">
+  🧑‍🏫 이 페이지를 북마크하세요. 새 레슨이 생길 때마다 여기에 추가됩니다.
+  다음 진행: <strong>"다음"</strong> → 실기: 실제 GPU에서 vllm serve 손계산 검증 (기종을 알려주세요). MoE(L11)도 대기 중.
+</div>
+
+</body>
+</html>

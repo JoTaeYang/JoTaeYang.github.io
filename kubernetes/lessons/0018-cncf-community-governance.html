@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0018 — CNCF 커뮤니티·거버넌스·페르소나: 누가 무엇을 움직이나</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0018 <span class="tag">심화 · Architecture</span></p>
+<h1>CNCF 커뮤니티·거버넌스·페르소나</h1>
+<p class="subtitle">기술이 아니라 <b>사람과 조직</b>을 배우는 레슨 — 누가 프로젝트를 승격시키고, 왜 한 회사가 못 좌우하며, "이 일은 누구 역할인가"를 KCNA 가 어떻게 묻는지.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> KCNA 는 아키텍처 도메인에서 <b>기술만큼 "조직·사람"</b>을 묻는다 —
+<b>Governing Board 대 TOC</b>의 역할 분리, 프로젝트를 <b>누가</b> 승격시키나, 왜 오픈 거버넌스인가,
+그리고 <b>페르소나</b>("이건 개발자 일? 운영 일? 보안 일?"). 이번 레슨으로 지금까지 배운 조각들에
+<b>역할 이름표</b>를 붙여, 갭 체크의 마지막 개념 칸을 닫는다.
+</div>
+
+<h2>0. 한눈에 — 세 질문</h2>
+
+<div class="aha">
+<span class="label">딱 이 세 줄</span>
+<p><b>누가 재단을 굴리나</b> = <b>Governing Board</b>(돈·예산·마케팅) 와 <b>TOC</b>(기술 방향·프로젝트 승격 투표) 두 축. 이 분리가 KCNA 단골.</p>
+<p><b>왜 특정 회사가 못 좌우하나</b> = <b>오픈 거버넌스 = 벤더 중립</b>. <b>0012</b> 의 OCI 열린 표준과 같은 뿌리 — 그래서 lock-in 을 피한다.</p>
+<p><b>이 일은 누구 역할인가</b> = <b>페르소나</b>: application developer / operations·SRE·platform / security. 지금까지 배운 것에 역할을 매핑한다.</p>
+</div>
+
+<h2>1. CNCF 의 두 축 — Governing Board 대 TOC</h2>
+
+<p><b>CNCF</b>(Cloud Native Computing Foundation)는 <b>Linux Foundation 산하</b>의 재단이다.
+쿠버네티스(<b>0014</b> 에서 본 첫 graduated 프로젝트 중 하나)를 비롯한 수백 개 프로젝트의 <b>벤더 중립적 우산</b>.
+그런데 재단을 실제로 굴리는 힘은 <b>두 개의 서로 다른 몸통</b>으로 나뉜다 — 이 분리가 KCNA 의 단골 문제다.</p>
+
+<table class="cmp">
+<tr><th>기구</th><th>맡는 일</th><th>한 줄 기억</th></tr>
+<tr><td><b>Governing Board</b> (GB)</td><td>비즈니스 — 예산, 마케팅, 회원사 관리, 이벤트(KubeCon)</td><td><b>돈과 사업</b>을 결정</td></tr>
+<tr><td><b>TOC</b> (Technical Oversight Committee)</td><td>기술 방향, 프로젝트 <b>성숙도 승급 투표</b>, 기술 표준·정합성</td><td><b>기술과 프로젝트</b>를 결정</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — 지갑과 손은 다르다</span>
+<b>Governing Board 는 "지갑", TOC 는 "손"</b>이다. GB 는 돈을 걷고 쓰지만 <b>어떤 프로젝트를 받아들일지·승격할지는 절대 못 정한다</b> —
+그건 오직 TOC 의 몫. 반대로 TOC 는 예산이나 마케팅을 정하지 않는다. KCNA 가 노리는 함정이 바로 이것:
+"프로젝트를 graduated 로 올리는 건 누구?" → 답은 <b>TOC</b>(투표), Governing Board 가 아니다.
+</div>
+
+<h2>2. 성숙도 사다리 — 누가, 어떻게 움직이나</h2>
+
+<p><b>0014</b> 에서 프로젝트 성숙도 사다리를 이름표만 붙였다: <b>Sandbox → Incubating → Graduated</b>.
+여기선 그 사다리를 <b>누가 밀어 올리나</b>를 더 깊게 본다. 답은 위에서 봤듯 <b>TOC 의 투표</b>다.</p>
+
+<table class="cmp">
+<tr><th>단계</th><th>뜻 (0014 복습)</th><th>움직이는 힘</th></tr>
+<tr><td><b>Sandbox</b></td><td>초기·실험적. 재단이 "지켜보는 중"</td><td>TOC 가 받아들임 (진입 장벽 낮음)</td></tr>
+<tr><td><b>Incubating</b></td><td>실사용처·기여자 커뮤니티가 생김</td><td><b>TOC 투표</b>로 승급</td></tr>
+<tr><td><b>Graduated</b></td><td>성숙·안정. 프로덕션에 널리 검증</td><td><b>TOC 투표</b> + 엄격한 기준(보안 감사, 다수 벤더 기여, 거버넌스 문서)</td></tr>
+</table>
+
+<div class="note">Graduated 승급 기준에는 "<b>한 회사에 종속되지 않을 것</b>"(committer 가 여러 조직에 분산), 공개 거버넌스 문서,
+보안 감사, CII/OpenSSF Best Practices 배지 등이 들어간다. 즉 사다리 자체가 <b>벤더 중립성을 강제하는 장치</b>다 —
+다음 절의 오픈 거버넌스와 정확히 이어진다.</div>
+
+<h2>3. 왜 오픈 거버넌스인가 — 벤더 중립의 뿌리</h2>
+
+<p><b>오픈 거버넌스(open governance)</b> = 프로젝트의 의사결정 권한이 <b>한 회사에 몰려 있지 않고</b>
+공개된 규칙과 커뮤니티에 분산된 상태. 핵심 효과는 <b>한 회사가 프로젝트를 좌우하지 못한다</b>는 것 —
+그래서 그 회사에 종속되는 <b>lock-in 을 피한다</b>.</p>
+
+<div class="aha">
+<span class="label">아하 — OCI 와 같은 뿌리</span>
+이건 새 아이디어가 아니다. <b>0012·0014</b> 의 <b>OCI</b>(Open Container Initiative) — "컨테이너 이미지·런타임의 <b>열린 표준</b>,
+그래서 Docker 를 지워도 OCI 이미지는 그대로 돈다" — 와 <b>정확히 같은 정신</b>이다. OCI 는 <b>포맷</b>을 열어 벤더 중립을 만들고,
+CNCF 의 오픈 거버넌스는 <b>의사결정</b>을 열어 벤더 중립을 만든다. 둘 다 답하는 질문은 하나다:
+"이 회사가 망하거나 마음을 바꾸면 나는 갇히나?" — 아니오.
+</div>
+
+<div class="warn"><b>KCNA 함정:</b> "오픈소스"와 "오픈 거버넌스"는 다르다. 코드가 공개(오픈소스)여도
+한 회사가 로드맵과 머지 권한을 독점하면 오픈 거버넌스가 아니다. CNCF 가 요구하는 건 <b>코드 공개 + 결정권 분산</b> 둘 다다.</div>
+
+<h2>4. 커뮤니티 역할 — 누가 누구인가</h2>
+
+<p>오픈 거버넌스는 사람들이 채운다. KCNA 가 이름과 한 줄 역할만 물어보는 <b>커뮤니티 역할</b>들:</p>
+
+<table class="cmp">
+<tr><th>역할</th><th>한 줄</th></tr>
+<tr><td><b>Contributor</b></td><td>코드·문서·이슈로 기여하는 누구나 (진입점)</td></tr>
+<tr><td><b>Maintainer</b></td><td>프로젝트의 방향·머지 권한을 가진 핵심 관리자</td></tr>
+<tr><td><b>CNCF Ambassador</b></td><td>커뮤니티를 전파하는 공인 자원봉사자 (강연·글·멘토링). 기술 결정권이 아니라 <b>홍보·교육</b> 역할</td></tr>
+<tr><td><b>End User Community</b></td><td>프로젝트를 <b>운영에 쓰는 조직</b>들의 모임. 벤더가 아니라 <b>사용자</b> 관점의 피드백을 재단에 전달</td></tr>
+<tr><td><b>SIG</b> (Special Interest Group)</td><td>특정 영역(네트워킹, 스토리지, 보안 등)을 맡는 상설 작업 그룹</td></tr>
+</table>
+
+<div class="note"><b>Ambassador vs Maintainer</b> 헷갈리지 말 것: maintainer 는 <b>프로젝트 안</b>의 기술 권한, ambassador 는
+<b>프로젝트 밖</b>으로의 전파 역할이다. <b>End User Community</b> 가 중요한 이유 — CNCF 는 벤더뿐 아니라 실제 <b>운영 사용자</b>의
+목소리를 거버넌스에 넣어 중립성을 지킨다.</div>
+
+<h2>5. 페르소나 — "이건 누구 역할?"</h2>
+
+<p>KCNA 는 종종 <b>페르소나(persona)</b>를 묻는다: 어떤 작업이 <b>어떤 역할의 관심사</b>냐는 것.
+클라우드 네이티브 세계의 세 큰 페르소나와, <b>지금까지 배운 것</b>을 매핑하면:</p>
+
+<table class="cmp">
+<tr><th>페르소나</th><th>관심사</th><th>지금까지 배운 것 매핑</th></tr>
+<tr><td><b>Application Developer</b></td><td>앱을 짜고 컨테이너로 만들어 배포. "내 코드가 잘 도나"</td><td><b>0006</b> requests(내 앱이 필요한 자원 선언) / 12-factor(<b>0014</b>) 원칙대로 앱 설계</td></tr>
+<tr><td><b>Operations · SRE · Platform</b></td><td>클러스터를 안정적으로 운영·확장. "전체가 잘 도나"</td><td><b>0006</b> limits(폭주 방지 상한) / GitOps(<b>0014</b>)로 안전한 딜리버리 / 노드·용량 관리</td></tr>
+<tr><td><b>Security</b></td><td>접근 통제·정책·최소 권한. "누가 뭘 할 수 있나"</td><td><b>0008</b> RBAC·ServiceAccount(누가 API 로 무엇을 하나) / Secret 관리</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — 경계는 협업 지점이다</span>
+페르소나는 담을 치자는 게 아니라 <b>누가 무엇에 책임지나</b>를 나눈 것이다. <b>0006 의 requests/limits</b> 가 좋은 예:
+<b>requests</b> 는 "내 앱엔 이만큼 필요"라고 <b>개발자</b>가 선언하고, <b>limits</b> 는 "전체를 지키려면 이 상한"이라고 <b>운영</b>이 건다 —
+같은 필드에서 두 페르소나가 <b>협업</b>한다. KCNA 가 "requests 를 정하는 건 누구 관심사?"라고 물으면 이 경계를 떠올리면 된다.
+</div>
+
+<h2>6. 오픈소스 라이선스와 기여</h2>
+
+<p>CNCF 프로젝트 대부분은 <b>Apache License 2.0</b> 을 쓴다 — 상업적 사용·수정·배포가 자유롭고 특허 보호 조항이 있어
+기업 채택에 안전하다. 이것도 벤더 중립의 일부다. 코드를 기여하려면 보통 <b>서명 절차</b>를 거친다:</p>
+
+<table class="cmp">
+<tr><th>용어</th><th>한 줄</th></tr>
+<tr><td><b>DCO</b> (Developer Certificate of Origin)</td><td>커밋에 <code>Signed-off-by</code> 를 달아 "이 코드를 낼 권리가 내게 있다"고 <b>서명</b>. 가볍다</td></tr>
+<tr><td><b>CLA</b> (Contributor License Agreement)</td><td>재단/회사에 기여물의 라이선스 권리를 부여하는 <b>계약 서명</b>. DCO 보다 무겁다</td></tr>
+</table>
+
+<div class="note">KCNA 는 "Apache 2.0 가 흔하다", "기여하려면 DCO/CLA 서명이 있을 수 있다" 정도의 <b>인지</b>만 물어본다.
+라이선스 조항 비교나 SPDX 같은 건 심화 — 이름표만 붙이고 넘어간다.</div>
+
+<h2>7. "Cloud Native" 공식 정의 — 배운 조각으로 되짚기</h2>
+
+<p>마지막으로, 이 모든 것의 우산인 <b>"Cloud Native"</b> 의 CNCF 공식 정의를 지금까지 배운 조각들로 되짚는다.
+정의(요약): <b>컨테이너·마이크로서비스·불변 인프라·선언적 API</b> 로 <b>확장 가능하고 회복력 있는(resilient)</b> 시스템을 짓는 접근.</p>
+
+<table class="cmp">
+<tr><th>정의의 조각</th><th>이미 손으로 만진 것</th></tr>
+<tr><td><b>컨테이너(Containers)</b></td><td><b>0012</b> OCI 이미지·런타임 — 표준화된 배포 단위</td></tr>
+<tr><td><b>마이크로서비스(Microservices)</b></td><td><b>0014</b> 작게 쪼개 독립 배포·확장 (vs 모놀리스)</td></tr>
+<tr><td><b>불변 인프라(Immutable Infra)</b></td><td>Pod 를 고치지 않고 <b>교체</b> — 새 이미지로 새 Pod (12-factor disposable, <b>0014</b>)</td></tr>
+<tr><td><b>선언적 API(Declarative API)</b></td><td>"원하는 상태"를 YAML 로 선언 → 컨트롤러 제어 루프가 수렴 (GitOps 도 같은 골격, <b>0014</b>)</td></tr>
+<tr><td><b>회복력(Resilient)</b></td><td>Pod 죽으면 자동 재생성, replicas 로 다중화 — 자가 치유</td></tr>
+</table>
+
+<div class="aha">
+<span class="label">아하 — 정의는 배운 것의 목차였다</span>
+"Cloud Native" 정의는 새 암기 카드가 아니라 <b>지금까지의 레슨 목차</b>다. 컨테이너(0012)로 담고,
+마이크로서비스(0014)로 쪼개고, 불변·선언적으로 굴리고(제어 루프), 회복력을 얻는다 — 이 다섯 단어를
+각각 <b>내가 만진 것 하나</b>와 연결할 수 있으면, 정의 문제는 이미 풀 수 있는 것이다.
+</div>
+
+<h2>8. 관찰 (선택, 3분) — landscape 를 지도처럼 훑기</h2>
+
+<p>이 레슨엔 hands-on 이 없다(순수 개념). 대신 <b>관찰 과제</b> 하나 —
+<a href="https://landscape.cncf.io/">landscape.cncf.io</a> 를 한 번 열어 이렇게 훑어본다:</p>
+
+<div class="note">① 프로젝트를 <b>Graduated / Incubating / Sandbox</b> 로 필터해 본다(2절의 사다리 확인).
+② 같은 칸(예: Observability)에 <b>여러 벤더의 여러 프로젝트</b>가 있음을 본다 — 이게 벤더 중립의 모습이다.
+③ 아무 graduated 프로젝트나 눌러 <b>maintainer 가 여러 회사</b>에 분산돼 있는지 본다(3절의 증거).
+외울 필요 없다. "아, 이게 그 지도구나" 하고 감만 잡으면 된다.</div>
+
+<h2>9. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. CNCF 에서 어떤 프로젝트를 <b>Graduated 로 승격</b>시킬지 결정(투표)하는 것은?</p>
+  <div class="opts">
+    <button class="opt">Governing Board — 예산과 마케팅을 담당하는 이사회</button>
+    <button class="opt" data-correct="true">TOC (Technical Oversight Committee) — 기술 방향과 성숙도 승급을 투표로 결정</button>
+    <button class="opt">CNCF Ambassador 들의 다수결</button>
+  </div>
+  <div class="explain">역할 분리가 핵심: Governing Board 는 "지갑"(돈·마케팅·회원사), TOC 는 "손"(기술 방향·프로젝트 승급 투표). 프로젝트를 사다리 위로 올리는 건 오직 TOC 다. Ambassador 는 전파 역할이라 기술 결정권이 없다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. (레슨 0012 복습) CNCF 의 <b>오픈 거버넌스</b>가 lock-in 을 피하게 하는 원리와 <b>같은 뿌리</b>를 가진 것은?</p>
+  <div class="opts">
+    <button class="opt">RBAC — 사용자별 권한을 세밀하게 나누는 접근 통제</button>
+    <button class="opt" data-correct="true">OCI (Open Container Initiative) — 컨테이너 이미지·런타임의 열린 표준</button>
+    <button class="opt">Helm — 쿠버네티스 패키지 매니저</button>
+  </div>
+  <div class="explain">둘 다 "이 회사에 갇히지 않는다"를 만든다. OCI 는 포맷을 열어(0012: Docker 를 지워도 OCI 이미지는 돈다) 벤더 중립을 만들고, 오픈 거버넌스는 의사결정을 열어(한 회사가 프로젝트를 좌우 못 함) 벤더 중립을 만든다. RBAC(0008)는 접근 통제, Helm 은 패키징 — 다른 문제다.</div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (레슨 0006·0008 복습) KCNA 스타일 페르소나 문제 — "누가 <b>RBAC 규칙과 ServiceAccount 권한</b>을 정의하는가?"에 가장 맞는 페르소나는?</p>
+  <div class="opts">
+    <button class="opt">Application Developer — 앱 코드를 짜고 컨테이너로 배포하는 데 집중</button>
+    <button class="opt" data-correct="true">Security (또는 platform) — 접근 통제·최소 권한·정책을 책임지는 역할</button>
+    <button class="opt">CNCF Ambassador — 커뮤니티 전파와 교육을 맡는 자원봉사자</button>
+  </div>
+  <div class="explain">"누가 무엇을 할 수 있나"는 보안 페르소나의 관심사다. 0008 의 RBAC·ServiceAccount 는 최소 권한을 거는 도구이므로 security/platform 역할에 매핑된다. 대조적으로 0006 의 requests 는 개발자, limits 는 운영이 협업하는 지점이었다. Ambassador 는 거버넌스가 아니라 전파 역할이다.</div>
+</div>
+
+<hr>
+
+<div class="win">
+<b>판정:</b> Q1·Q2·Q3 를 맞히면 아키텍처 도메인의 <b>"조직·사람" 축이 개념 수준으로 ✅</b> —
+TOC 대 Governing Board, 오픈 거버넌스, 페르소나까지 KCNA 범위가 닫힌다. 남은 건 <b>전 도메인 모의 진단</b>으로
+마지막 갭을 확인하고 응시 일정을 잡는 것뿐. 지금까지 배운 기술 조각들에 이제 <b>역할 이름표</b>까지 붙었다.
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">이 레슨은 조직·사람 이름이 많아 헷갈리기 쉽다. 궁금한 것만 펼쳐 보면 된다.</p>
+
+<details class="faq">
+<summary>CNCF 랑 Linux Foundation 은 무슨 관계예요?</summary>
+<div class="a"><p><b>Linux Foundation(LF)</b> 이 상위 우산이고, <b>CNCF 는 그 산하 재단</b> 중 하나다(2015 년 설립). LF 는 리눅스 커널뿐 아니라 여러 산업별 재단을 품는데, 클라우드 네이티브 프로젝트(쿠버네티스 등)를 맡는 게 CNCF 다. KCNA 는 "CNCF 는 Linux Foundation 산하"만 알면 충분.</p></div>
+</details>
+
+<details class="faq">
+<summary>Governing Board 랑 TOC, 계속 헷갈려요. 쉽게 구분법 없어요?</summary>
+<div class="a"><p><b>Board = 돈(business), TOC = 기술(technical)</b>. Board 는 예산·마케팅·회원사·KubeCon 을 굴리는 <b>지갑</b>, TOC 는 어떤 프로젝트를 받고 승격시킬지 <b>투표로 정하는 손</b>이다. 시험에서 "프로젝트 승급은 누구?"가 나오면 무조건 <b>TOC</b>. Board 는 프로젝트 승급에 손대지 않는다.</p></div>
+</details>
+
+<details class="faq">
+<summary>오픈소스면 다 오픈 거버넌스 아닌가요?</summary>
+<div class="a"><p>아니다. <b>오픈소스 = 코드 공개</b>, <b>오픈 거버넌스 = 결정권 분산</b>이다. 코드가 공개돼 있어도 한 회사가 로드맵·머지 권한을 독점하면 오픈 거버넌스가 아니다. CNCF 가 graduated 기준으로 "maintainer 가 여러 회사에 분산"을 요구하는 이유가 바로 이 결정권 분산을 강제하려는 것이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>CNCF Ambassador 는 뭐 하는 사람이에요?</summary>
+<div class="a"><p>클라우드 네이티브 커뮤니티를 <b>전파하는 공인 자원봉사자</b>다. 강연·글쓰기·밋업·멘토링으로 사람들을 돕는다. 주의할 점: ambassador 는 <b>홍보·교육 역할</b>일 뿐 프로젝트의 기술 결정권(머지·승급 투표)은 없다. Maintainer(프로젝트 안 기술 권한)와 헷갈리지 말 것.</p></div>
+</details>
+
+<details class="faq">
+<summary>End User Community 는 왜 따로 있어요?</summary>
+<div class="a"><p>CNCF 가 <b>벤더(파는 회사)뿐 아니라 실제 운영에 쓰는 사용자</b>의 목소리를 거버넌스에 넣으려는 장치다. 프로젝트를 프로덕션에서 굴리는 조직들이 모여 "이런 게 필요하다/이게 아프다"를 재단·프로젝트에 전달한다. 사용자 관점이 있어야 특정 벤더 이익으로 치우치지 않으니, 이것도 벤더 중립을 지키는 방법이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>SIG 랑 프로젝트는 뭐가 달라요?</summary>
+<div class="a"><p><b>프로젝트</b>는 배포되는 소프트웨어(예: Prometheus)이고, <b>SIG(Special Interest Group)</b>는 특정 <b>영역</b>(네트워킹, 스토리지, 보안 등)을 지속적으로 맡는 <b>작업 그룹</b>이다. 쿠버네티스 내부도 SIG-Network, SIG-Storage 처럼 나뉜다. KCNA 는 "SIG = 특정 영역의 상설 그룹" 정도면 충분.</p></div>
+</details>
+
+<details class="faq">
+<summary>페르소나가 정확히 뭐예요? 왜 시험에 나와요?</summary>
+<div class="a"><p>페르소나는 클라우드 네이티브 일을 <b>역할별 관심사</b>로 나눈 것이다: 개발자(내 앱), 운영/SRE/platform(전체 안정), 보안(접근 통제). KCNA 가 이걸 묻는 이유는 실무에서 "이 작업은 누구 책임인가"를 아는 게 중요하기 때문. 예를 들어 RBAC 설정은 보안, 앱 자원 요청(requests)은 개발자 관심사 — 이렇게 매핑할 수 있으면 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>requests 는 개발자, limits 는 운영이라니, 같은 필드 아니에요?</summary>
+<div class="a"><p>맞다, <b>0006</b> 에서 본 같은 Pod 스펙의 이웃 필드다. 그래서 좋은 <b>협업 예시</b>다: <b>requests</b>("내 앱엔 이만큼 필요해")는 앱을 아는 <b>개발자</b>가 선언하고, <b>limits</b>("전체를 지키려면 이 상한")는 클러스터를 지키는 <b>운영</b>이 건다. 페르소나는 담이 아니라 <b>책임 분담</b>이라, 이렇게 한 지점에서 두 역할이 만나는 게 자연스럽다.</p></div>
+</details>
+
+<details class="faq">
+<summary>DCO 랑 CLA 는 꼭 알아야 해요?</summary>
+<div class="a"><p>KCNA 수준에선 <b>이름과 한 줄 역할</b>이면 충분하다. <b>DCO</b>는 커밋에 <code>Signed-off-by</code> 한 줄로 "이 코드 낼 권리가 내게 있다"고 서명하는 가벼운 방식, <b>CLA</b>는 기여물 라이선스 권리를 재단/회사에 넘기는 좀 더 무거운 계약이다. "기여하려면 서명 절차가 있을 수 있다" 정도의 인지면 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>"Cloud Native" 정의를 통째로 외워야 하나요?</summary>
+<div class="a"><p>통암기보다 <b>다섯 조각을 배운 것과 연결</b>하는 게 낫다: 컨테이너(0012 OCI), 마이크로서비스(0014), 불변 인프라(Pod 교체), 선언적 API(제어 루프·YAML), 회복력(자가 치유). 각 단어를 "내가 만진 것 하나"와 이을 수 있으면, 정의 문제는 암기가 아니라 <b>목차 확인</b>이 된다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://github.com/cncf/toc">CNCF TOC 저장소</a> — TOC 의 역할·프로젝트 승급 프로세스 원전.
+<a href="https://github.com/cncf/foundation">cncf/foundation</a> 에서 거버넌스 헌장(Governing Board vs TOC)을,
+<a href="https://landscape.cncf.io/">CNCF Landscape</a> 로 프로젝트 생태계를 훑을 수 있다.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> "KubeCon·CNCF 인증(KCNA/CKA/CKAD) 체계는 어떻게 엮이나?",
+"maintainer 가 되려면 어떤 경로인가?", "특정 프로젝트가 archived 되면 어떻게 되나?" —
+이 조직·커뮤니티 주제도 원하면 짧게 붙일 수 있다.
+</div>
+
+<nav class="nav">
+  <a href="0017-serverless-knative.html">← 0017 서버리스</a>
+  <a href="../index.html">레슨 목차</a>
+  <a href="../reference/kcna-gap-check.html">KCNA 갭 체크</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

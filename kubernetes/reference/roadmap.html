@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>성장 로드맵 — Kubernetes Mastery</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Reference</p>
+<h1>성장 로드맵: 초보 → Kubestronaut</h1>
+<p class="subtitle">이 트랙의 지도. 각 단계는 자격증 하나로 검증된다.</p>
+
+<div class="note">
+CNCF 쿠버네티스 자격증 5종(KCNA, KCSA, CKA, CKAD, CKS)을 전부 보유하면
+<a href="https://www.cncf.io/training/kubestronaut/">Kubestronaut</a> 타이틀이 부여된다.
+KCNA/KCSA는 객관식 시험, CKA/CKAD/CKS는 실제 클러스터에서 문제를 푸는 실기 시험(2시간)이다.
+CKS는 <b>유효한 CKA 보유</b>가 응시 조건이므로 순서가 강제된다.
+</div>
+
+<h2>단계별 지도</h2>
+
+<table class="cmp">
+<tr><th>단계</th><th>목표 역량</th><th>검증 자격증</th><th>주 실습 환경</th></tr>
+<tr>
+  <td><b>0. 기반</b></td>
+  <td>컨테이너, 이미지, 쿠버네티스가 풀려는 문제. kubectl 기본기.</td>
+  <td class="muted">(진단으로 스킵 가능)</td>
+  <td>kind 로컬 클러스터</td>
+</tr>
+<tr>
+  <td><b>1. 생태계 이해</b></td>
+  <td>K8s 리소스 모델 전반 + CNCF 생태계(컨테이너 런타임, GitOps, 관측성) 어휘.</td>
+  <td><a href="https://www.cncf.io/training/certification/kcna/">KCNA</a> (객관식)</td>
+  <td>kind · killercoda</td>
+</tr>
+<tr>
+  <td><b>2. 보안 개념</b></td>
+  <td>4C 보안 모델, 인증/인가, Pod Security, 공급망 보안 개념.</td>
+  <td><a href="https://www.cncf.io/training/certification/kcsa/">KCSA</a> (객관식)</td>
+  <td>kind · killercoda</td>
+</tr>
+<tr>
+  <td><b>3. 앱 개발·배포</b></td>
+  <td>Deployment/Service/Ingress/ConfigMap/Secret/Probe/Job 을 맨손으로 작성·디버깅.</td>
+  <td><a href="https://www.cncf.io/training/certification/ckad/">CKAD</a> (실기)</td>
+  <td>killercoda · killer.sh</td>
+</tr>
+<tr>
+  <td><b>4. 클러스터 운영</b></td>
+  <td>kubeadm 설치/업그레이드, etcd 백업/복구, 노드/네트워크 장애 해결.</td>
+  <td><a href="https://www.cncf.io/training/certification/cka/">CKA</a> (실기)</td>
+  <td>VM + kubeadm · killer.sh</td>
+</tr>
+<tr>
+  <td><b>5. 보안 실전</b></td>
+  <td>RBAC 최소권한, NetworkPolicy, 런타임 보안, 이미지 스캐닝, API 감사(audit).</td>
+  <td><a href="https://www.cncf.io/training/certification/cks/">CKS</a> (실기, CKA 필수)</td>
+  <td>VM + kubeadm · killer.sh</td>
+</tr>
+</table>
+
+<div class="aha">
+<span class="label">왜 이 순서인가</span>
+KCNA·KCSA(객관식)로 <b>지도를 먼저</b> 그리고, CKAD(가장 응용 범위가 좁은 실기)로 손을 만든 뒤,
+CKA(운영 전반) → CKS(CKA 전제)로 확장한다. 이론→실기, 좁음→넓음, 그리고 응시 조건(CKS←CKA)을
+모두 만족하는 유일한 자연스러운 순서다. 순서는 학습자와 합의 후 확정.
+</div>
+
+<h2>단계 통과 기준</h2>
+<ul>
+  <li>각 단계는 해당 자격증 <b>합격</b>으로 종료된다 (실기: killer.sh 모의시험 1회 통과 후 응시).</li>
+  <li>레슨마다 하나의 skill 을 얻고, 배운 것은 learning record 로 남긴다.</li>
+  <li>실습은 언제나 일회용 클러스터에서 — 운영 클러스터(mgmt/tkai3)는 이 트랙 범위 밖.</li>
+</ul>
+
+<div class="source">
+<span class="label">Primary Source</span>
+각 자격증의 공식 커리큘럼: <a href="https://github.com/cncf/curriculum">github.com/cncf/curriculum</a> —
+시험 범위가 바뀌면 이 저장소가 먼저 바뀐다. 단계 시작 전 반드시 확인.
+</div>
+
+<nav class="nav">
+  <a href="../lessons/0001-placement-diagnostic.html">→ Lesson 0001: 수준 진단</a>
+  <a href="kcna-gap-check.html">→ KCNA 갭 체크</a>
+</nav>
+
+</div>
+</body>
+</html>

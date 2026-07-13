@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 0002 — Deployment 는 Pod 를 만들지 않는다</title>
+<link rel="stylesheet" href="../assets/styles.css">
+</head>
+<body>
+<div class="wrap">
+
+<p class="kicker">Kubernetes Mastery · Lesson 0002 <span class="tag">Level 1 · 실습</span></p>
+<h1>Deployment 는 Pod 를 만들지 않는다</h1>
+<p class="subtitle">진단에서 틀린 바로 그 문제. 이번엔 외우는 게 아니라 눈으로 직접 확인한다.</p>
+
+<div class="win">
+<b>이번 레슨의 win:</b> 내 로컬 클러스터에서 Deployment → ReplicaSet → Pod
+소유 체인을 직접 추적하고, Pod 를 죽여도 되살아나는 이유를 체인으로 설명할 수 있다.
+</div>
+
+<h2>1. 왜 세 층인가</h2>
+
+<p>Deployment 를 만들면 쿠버네티스에는 리소스가 <b>세 종류</b> 생긴다:</p>
+
+<div class="diagram">
+  <span class="box cp"><span class="t">Deployment</span><span class="d">"어떤 버전을, 어떻게 교체할지"</span></span>
+  <span class="arrow">→ 만든다 →</span>
+  <span class="box"><span class="t">ReplicaSet</span><span class="d">"이 템플릿의 Pod 를 N 개 유지"</span></span>
+  <span class="arrow">→ 만든다 →</span>
+  <span class="box wk"><span class="t">Pod ×N</span><span class="d">실제로 도는 컨테이너</span></span>
+</div>
+
+<p>역할이 다르기 때문이다. <b>ReplicaSet</b> 은 단 하나만 안다: "이 템플릿의 Pod 개수를 N 으로 유지하라."
+Pod 가 죽으면 새로 만든다 — 그게 전부다.
+<b>Deployment</b> 는 그 위에서 <em>버전 교체</em>를 담당한다: 이미지를 바꾸면 <b>새 ReplicaSet 을 만들고</b>,
+새 것을 0→3 으로 늘리며 옛 것을 3→0 으로 줄인다. 이게 롤링 업데이트의 실체다.</p>
+
+<div class="aha">
+<span class="label">아하</span>
+레슨 0001 Q2 에서 맞힌 "제어 루프"가 여기서 두 겹으로 돈다:
+Deployment 컨트롤러는 ReplicaSet 들을 수렴시키고, ReplicaSet 컨트롤러는 Pod 개수를 수렴시킨다.
+각 층은 바로 아래 층만 책임진다 — 그래서 Deployment 는 Pod 를 <em>직접</em> 만들지 않는다.
+</div>
+
+<h2>2. 실습 — 체인을 눈으로 추적한다</h2>
+
+<div class="note">
+환경: 로컬 일회용 클러스터 <a href="https://kind.sigs.k8s.io/docs/user/quick-start/">kind</a>.
+Docker(또는 Podman/OrbStack)가 떠 있어야 한다. 이미 kind 클러스터가 있으면 1번은 건너뛴다.
+</div>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">brew install kind && kind create cluster --name mastery</span>
+<span class="prompt">$</span> <span class="cmd">kubectl create deployment web --image=nginx:1.27 --replicas=3</span>
+</div>
+
+<p><b>추적 1 — 세 층이 전부 생겼는지:</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get deploy,rs,pod</span>
+<span class="out">NAME                  READY   UP-TO-DATE   AVAILABLE
+deployment.apps/web   3/3     3            3
+
+NAME                            DESIRED   CURRENT   READY
+replicaset.apps/web-<span class="hl">7c5ddbdf54</span>   3         3         3
+
+NAME                      READY   STATUS    RESTARTS
+pod/web-<span class="hl">7c5ddbdf54</span>-8kq2x   1/1     Running   0
+pod/web-<span class="hl">7c5ddbdf54</span>-p9jtm   1/1     Running   0
+pod/web-<span class="hl">7c5ddbdf54</span>-zv4wn   1/1     Running   0</span>
+</div>
+
+<p>이름부터 체인이다: Pod 이름 = <code>Deployment이름-ReplicaSet해시-랜덤</code>.
+소유 관계는 이름 규칙이 아니라 메타데이터에 실제로 기록되어 있다:</p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl get pod -l app=web -o jsonpath='{.items[0].metadata.ownerReferences[0].kind}{" / "}{.items[0].metadata.ownerReferences[0].name}'</span>
+<span class="out">ReplicaSet / web-7c5ddbdf54</span>
+</div>
+
+<p><b>추적 2 — Pod 를 죽이면 누가 살리나:</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl delete pod -l app=web --wait=false && kubectl get pod -w</span>
+<span class="out">... 기존 Pod Terminating, 새 이름의 Pod 가 즉시 ContainerCreating → Running (Ctrl-C 로 종료)</span>
+</div>
+
+<p>당신이 아니라 <b>ReplicaSet 컨트롤러</b>가 살렸다. "DESIRED 3, 현재 0" 을 보고 3개를 다시 만든 것.</p>
+
+<p><b>추적 3 — 이미지를 바꾸면 ReplicaSet 이 교체된다:</b></p>
+
+<div class="cluster"><span class="ctx">terminal</span>
+<span class="prompt">$</span> <span class="cmd">kubectl set image deployment/web nginx=nginx:1.28 && kubectl get rs -w</span>
+<span class="out">web-7c5ddbdf54   3 → 2 → 1 → 0     (옛 ReplicaSet 이 줄어들고)
+web-<span class="hl">6f9d8b7c44</span>   1 → 2 → 3         (새 ReplicaSet 이 늘어난다 — 해시가 다르다!)</span>
+</div>
+
+<div class="warn">
+옛 ReplicaSet 은 0 이 되어도 <b>삭제되지 않고 남는다</b> — <code>kubectl rollout undo</code> 가
+이걸 다시 키우는 방식으로 롤백하기 때문. 확인: <code>kubectl rollout undo deployment/web && kubectl get rs</code>
+</div>
+
+<p>끝났으면 정리: <code>kind delete cluster --name mastery</code> (또는 다음 레슨을 위해 남겨둔다).</p>
+
+<h2>3. 회상 연습</h2>
+
+<div class="quiz">
+  <p class="q">Q1. 롤링 업데이트 중 쿠버네티스가 실제로 하는 일은?</p>
+  <div class="opts">
+    <button class="opt">기존 ReplicaSet 의 Pod 템플릿을 새 이미지로 제자리에서 고친다</button>
+    <button class="opt" data-correct="true">새 ReplicaSet 을 만들어 늘리면서 옛 ReplicaSet 을 줄여 간다</button>
+    <button class="opt">Pod 를 하나씩 지우고 Deployment 가 직접 새 Pod 를 만든다</button>
+  </div>
+  <div class="explain">추적 3 에서 본 그대로. ReplicaSet 은 불변의 템플릿을 지키는 존재라 고치지 않고 <em>교체</em>한다. <a href="https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#updating-a-deployment">공식 문서: Updating a Deployment</a></div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q2. 추적 2 에서 지운 Pod 를 되살린 주체는?</p>
+  <div class="opts">
+    <button class="opt">Deployment 컨트롤러가 Pod 감소를 감지하고 새로 만들었다</button>
+    <button class="opt">kubelet 이 자기 노드의 죽은 컨테이너를 자동 재시작했다</button>
+    <button class="opt" data-correct="true">ReplicaSet 컨트롤러가 DESIRED 와의 차이를 보고 채워 넣었다</button>
+  </div>
+  <div class="explain">각 층은 바로 아래 층만 책임진다. Deployment 는 ReplicaSet 개수/크기만 보고, Pod 개수 유지는 ReplicaSet 의 일이다. <a href="https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/">공식 문서: ReplicaSet</a></div>
+</div>
+
+<div class="quiz">
+  <p class="q">Q3. (지난 레슨 복습) 재생성될 때마다 IP 가 바뀌는 Pod 들에 안정적인 내부 접점을 주는 것은?</p>
+  <div class="opts">
+    <button class="opt">Ingress</button>
+    <button class="opt" data-correct="true">Service</button>
+    <button class="opt">Endpoint</button>
+  </div>
+  <div class="explain">간격 반복(spaced retrieval): 레슨 0001 Q4. 방금 실습에서 Pod 이름/IP 가 계속 바뀌는 걸 봤다 — 그래서 Service 의 label selector 가 필요하다. 다음 레슨에서 이 Deployment 에 직접 Service 를 붙인다.</div>
+</div>
+
+<h2>초보자 질문 (막히면 여기부터)</h2>
+<p class="note">실습하다 떠오르는 "어? 이건 왜 이러지?"를 미리 모았다. 궁금한 것만 펼쳐 보면 된다 — 안 궁금하면 접힌 채 넘어가도 된다.</p>
+
+<details class="faq">
+<summary>Deployment 를 지우면 Pod 도 같이 지워지나요?</summary>
+<div class="a"><p>지워진다. 소유 체인 덕분이다 — Deployment 를 지우면 그것이 소유한 ReplicaSet 이, 그리고 ReplicaSet 이 소유한 Pod 들이 <b>연쇄 삭제(cascading delete)</b>된다. 이 연쇄를 실제로 잇는 게 각 리소스의 <code>ownerReferences</code> 다. 참고로 <code>--cascade=orphan</code> 을 주면 자식을 남길 수도 있다.</p></div>
+</details>
+
+<details class="faq">
+<summary><code>ownerReferences</code> 는 누가 채워 넣나요?</summary>
+<div class="a"><p>내가 아니라 <b>컨트롤러</b>가 채운다. ReplicaSet 컨트롤러가 Pod 를 만들 때 "내가 이 Pod 의 주인"이라고 Pod 의 <code>ownerReferences</code> 에 자기를 적고, Deployment 컨트롤러도 ReplicaSet 을 만들 때 똑같이 한다. 추적 1 의 <code>jsonpath</code> 로 본 <code>ReplicaSet / web-...</code> 이 바로 그 기록이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>ReplicaSet 을 직접 만들면 안 되나요?</summary>
+<div class="a"><p>만들 수는 있지만, 그러면 <b>롤링 업데이트를 잃는다</b>. 이미지를 바꾸면 Deployment 는 새 ReplicaSet 을 만들어 무중단 교체해 주는데, ReplicaSet 혼자서는 그 위 층이 없어 스스로 버전을 못 바꾼다. 그래서 실무에선 거의 항상 Deployment 를 쓰고 ReplicaSet 은 직접 손대지 않는다.</p></div>
+</details>
+
+<details class="faq">
+<summary>롤링 업데이트 중에 요청이 실패하지 않나요?</summary>
+<div class="a"><p>기본적으로 안 하도록 설계돼 있다. Deployment 는 옛 Pod 를 한 번에 다 죽이지 않고, 새 Pod 를 먼저 <code>Running</code> 상태로 올린 뒤에야 옛 것을 줄인다(<code>maxSurge</code> / <code>maxUnavailable</code> 로 조절). 다만 새 Pod 가 "떴다"와 "진짜 요청 받을 준비됐다"는 다르다 — 이 간극을 메우는 게 다음에 배울 readiness probe 다.</p></div>
+</details>
+
+<details class="faq">
+<summary>옛 ReplicaSet 이 0 인데 왜 안 지워지고 남아 있어요?</summary>
+<div class="a"><p><code>kubectl rollout undo</code> 의 롤백 재료로 일부러 남겨 둔다. 롤백은 옛 ReplicaSet 을 다시 0→N 으로 키우는 방식이라, 지워 버리면 되돌아갈 곳이 없어진다. 몇 개까지 보관할지는 Deployment 의 <code>revisionHistoryLimit</code>(기본 10)이 정한다.</p></div>
+</details>
+
+<details class="faq">
+<summary>kind 가 정확히 뭐예요? 진짜 클러스터인가요?</summary>
+<div class="a"><p><b>K</b>ubernetes <b>IN</b> <b>D</b>ocker — 쿠버네티스 노드를 통째로 <em>Docker 컨테이너 하나</em>로 돌리는 일회용 로컬 클러스터다. API 는 진짜 쿠버네티스와 똑같아서 학습·CI 에 딱 맞지만, 노드가 컨테이너라 프로덕션용은 아니다. 끝나면 <code>kind delete cluster</code> 로 통째로 버리면 된다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Pod 이름 뒤 <code>7c5ddbdf54</code> 같은 해시는 뭐예요?</summary>
+<div class="a"><p>ReplicaSet 이 지키는 <b>Pod 템플릿의 지문</b>이다(<code>pod-template-hash</code>). 템플릿이 같으면 같은 해시, 이미지 하나만 바뀌어도 해시가 달라진다 — 그래서 추적 3 에서 새 ReplicaSet 이 <em>다른</em> 해시로 나타난 것이다. 이 해시 덕에 두 ReplicaSet 이 서로의 Pod 를 헷갈리지 않는다.</p></div>
+</details>
+
+<details class="faq">
+<summary>Pod 를 지웠는데 이름이 다른 새 Pod 가 떠요. 같은 Pod 아닌가요?</summary>
+<div class="a"><p>다른 Pod 다. ReplicaSet 은 죽은 Pod 를 "되살리는" 게 아니라 <b>개수를 맞추려고 새로 만든다</b> — 그래서 이름 뒤 랜덤 부분이 바뀐다. Pod 는 원래 사라졌다 새로 생기는 걸 전제로 하는 일회용 존재라, 이름·IP 가 바뀌어도 정상이다. 안정적인 접점이 필요해서 Service 가 있는 것(레슨 0001 복습).</p></div>
+</details>
+
+<details class="faq">
+<summary><code>kubectl scale</code> 로 개수를 바꾸면 Deployment 를 거쳐야 하나요?</summary>
+<div class="a"><p>Deployment 를 대상으로 하라. <code>kubectl scale deployment/web --replicas=5</code> 하면 Deployment 가 자기 ReplicaSet 의 목표 개수를 바꾸고, ReplicaSet 이 Pod 를 채운다. ReplicaSet 을 직접 스케일하면 Deployment 컨트롤러가 "어? 목표랑 다르네" 하고 <em>도로 되돌린다</em> — 각 층은 바로 아래 층만 자기 것으로 관리하기 때문이다.</p></div>
+</details>
+
+<details class="faq">
+<summary>롤아웃이 도중에 멈춘 것 같은데 어떻게 확인해요?</summary>
+<div class="a"><p><code>kubectl rollout status deployment/web</code> 가 진행 상황을 실시간으로 보여 주고, 다 끝나면 알려 준다. 멈춰 있다면 대개 새 Pod 가 <code>Running</code> 이 못 돼서다(이미지 오타, <code>ImagePullBackOff</code> 등) — <code>kubectl get pod</code> 의 STATUS 열부터 본다. 이 진단 흐름은 CKA 실기의 단골이다.</p></div>
+</details>
+
+<div class="source">
+<span class="label">Primary Source</span>
+<a href="https://kubernetes.io/docs/concepts/workloads/controllers/deployment/">Kubernetes 공식 문서: Deployments</a> —
+오늘 본 세 가지 추적이 전부 이 한 페이지에 있다. "Updating a Deployment" 절까지만 읽어도 충분.
+</div>
+
+<div class="ask">
+<b>막히면 바로 질문.</b> kind 설치가 안 되거나, 출력이 레슨과 다르거나,
+"ReplicaSet 을 직접 만들면 안 되나?" 같은 의문이 들면 그대로 채팅에 — 좋은 질문은 다음 레슨이 된다.
+</div>
+
+<nav class="nav">
+  <a href="0001-placement-diagnostic.html">← 0001 수준 진단</a>
+  <a href="../reference/roadmap.html">성장 로드맵</a>
+</nav>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

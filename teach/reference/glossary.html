@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossary — LLM Inference Optimization</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  dl { margin: 1.4rem 0; }
+  dt { font-weight: 700; margin-top: 1.1rem; }
+  dt .en { color: var(--muted); font-weight: 400; font-size: 0.85em; }
+  dd { margin: 0.2rem 0 0; }
+  .phase { font-family: system-ui, sans-serif; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0.05rem 0.4rem; margin-left: 0.4rem; vertical-align: 2px; }
+</style>
+</head>
+<body>
+<p class="kicker"><a href="../index.html">🏠 Hub</a> · Reference · Living document</p>
+<h1>Glossary</h1>
+<p class="subtitle">Shared nomenclature for the course. Every lesson uses these exact terms.
+Grows as we go — a term appears here the first lesson that needs it.</p>
+
+<dl>
+  <dt>추론 <span class="en">Inference</span> <span class="phase">P0</span></dt>
+  <dd>Running a trained model to produce output. For an LLM: turning a prompt into generated tokens.
+  Distinct from <em>training</em>. Serving = doing inference for many users, reliably and fast.</dd>
+
+  <dt>토큰 <span class="en">Token</span> <span class="phase">P0</span></dt>
+  <dd>The unit an LLM reads and generates — a word-piece (~0.75 English words). A model generates
+  <strong>one token at a time</strong>, feeding each back in to produce the next.</dd>
+
+  <dt>자기회귀 디코딩 <span class="en">Autoregressive decoding</span> <span class="phase">P0</span></dt>
+  <dd>The one-token-at-a-time generation loop. Each new token requires a full pass through the model.
+  This sequential, one-at-a-time nature is the root cause of inference being memory-bound.</dd>
+
+  <dt>파라미터 / 가중치 <span class="en">Parameter / Weight</span> <span class="phase">P0</span></dt>
+  <dd>One of the model's learned numbers — a coefficient in a multiply-add. "70B model" = 70 billion of them.
+  Set during training, fixed during inference. Collectively they <em>are</em> the model's knowledge.</dd>
+
+  <dt>파라미터당 바이트 <span class="en">Bytes per parameter</span> <span class="phase">P0</span></dt>
+  <dd>How many bytes one parameter occupies — a <em>choice</em> of number format, not the value itself
+  (FP16=2B, FP8=1B, FP4=0.5B). <span class="mono">model bytes = param count × bytes/param</span>; quantization
+  shrinks the second factor only. Like int vs short vs char in C.</dd>
+
+  <dt>레이어 / 블록 <span class="en">Layer / Transformer block</span> <span class="phase">P1</span></dt>
+  <dd>One repeating processing stage that refines the token vectors and returns them in the same shape, so
+  stages compose (<span class="mono">f₈₀(…f₁(x))</span>). Each layer = an attention sub-layer + an FFN sub-layer,
+  with its own parameters. Stacking many (~80) gives depth: shallow layers catch surface/grammar, deep layers
+  catch meaning/intent.</dd>
+
+  <dt>FFN <span class="en">Feed-Forward Network</span> <span class="phase">P1</span></dt>
+  <dd>The per-token sub-layer inside a transformer block: after attention lets tokens exchange info, the FFN
+  lets each token transform that info on its own (two matrix multiplies + nonlinearity). Holds a large share
+  of a model's parameters.</dd>
+
+  <dt>임베딩 <span class="en">Embedding</span> <span class="phase">P1</span></dt>
+  <dd>The lookup table mapping each token to a learned vector ("meaning coordinates"). Similar meanings land
+  at nearby vectors, which is why attention's Q·K dot product measures relatedness. The table is itself parameters.</dd>
+
+  <dt>분산 표현 <span class="en">Distributed representation</span> <span class="phase">P1</span></dt>
+  <dd>Meaning lives not in a single vector axis but across combinations of axes (directions in the space).
+  Individual coordinates are usually not human-interpretable; concepts like "gender" exist as learned directions
+  (hence <span class="mono">king−man+woman≈queen</span>).</dd>
+
+  <dt>경사하강법 <span class="en">Gradient descent</span> <span class="phase">P1</span></dt>
+  <dd>The training procedure: repeatedly nudge every parameter a tiny bit in the direction that reduces
+  next-token prediction error. Over trillions of tokens the vector space self-organizes. (Training only —
+  inference just runs the fixed result.)</dd>
+
+  <dt>메모리 대역폭 <span class="en">Memory bandwidth</span> <span class="phase">P0</span></dt>
+  <dd>How fast the GPU can move data between its HBM memory and its compute units, in bytes/second
+  (e.g. B300 ≈ 8&nbsp;TB/s). Often the true speed limit of decode, not raw compute.</dd>
+
+  <dt>HBM <span class="en">High-Bandwidth Memory</span> <span class="phase">P0</span></dt>
+  <dd>The large, fast DRAM stacked on a GPU package where model weights and the KV cache live.
+  Big (tens–hundreds of GB) but slow relative to on-chip memory; every weight byte must travel from here.</dd>
+
+  <dt>FLOP / FLOPS <span class="en">Floating-point op(s) / per second</span> <span class="phase">P0</span></dt>
+  <dd>FLOP = one floating-point arithmetic operation. FLOPS = operations per second (a rate).
+  A GPU's headline "15 PFLOPS" is its compute ceiling.</dd>
+
+  <dt>연산 강도 <span class="en">Arithmetic intensity</span> <span class="phase">P0</span></dt>
+  <dd>FLOPs performed per byte moved from memory (FLOP/byte). Low intensity → memory-bound;
+  high intensity → compute-bound. Batch-1 LLM decode sits near 1 FLOP/byte — deeply memory-bound.</dd>
+
+  <dt>루프라인 모델 <span class="en">Roofline model</span> <span class="phase">P0</span></dt>
+  <dd>A plot of achievable performance vs. arithmetic intensity. The "roof" has a slanted
+  (bandwidth-limited) part and a flat (compute-limited) part. Where your workload lands tells you
+  which resource to optimize.</dd>
+
+  <dt>메모리 바운드 / 컴퓨트 바운드 <span class="en">Memory-bound / Compute-bound</span> <span class="phase">P0</span></dt>
+  <dd>A workload is <em>memory-bound</em> if it finishes faster only by moving bytes faster, and
+  <em>compute-bound</em> if only by doing math faster. LLM decode is the former.</dd>
+
+  <dt>어텐션 <span class="en">Attention</span> <span class="phase">P1</span></dt>
+  <dd>The mechanism by which each token pulls information from other tokens, weighted by relevance.
+  Every token becomes three vectors: <strong>Q</strong>uery ("what I'm looking for"),
+  <strong>K</strong>ey ("what I advertise"), <strong>V</strong>alue ("the content I hand over").
+  A token's Q is dot-producted with every past token's K → softmax → weights → weighted sum of the Vs.
+  Because a token attends to <em>all</em> past tokens, past K/V must be kept — the root of the KV cache
+  and of memory-bound decode.</dd>
+
+  <dt>셀프 어텐션 <span class="en">Self-attention</span> <span class="phase">P1</span></dt>
+  <dd>Attention where tokens attend to other tokens within the same sequence (rather than to a separate
+  input). The core operation of the transformer.</dd>
+
+  <dt>헤드 <span class="en">Attention head</span> <span class="phase">P1</span></dt>
+  <dd>One parallel "view" of attention. A model runs many heads at once, each learning a different kind of
+  relation (grammar, topic, coreference…). Each head normally has its own Q/K/V.</dd>
+
+  <dt>MHA / GQA / MQA <span class="en">Multi-Head / Grouped-Query / Multi-Query Attention</span> <span class="phase">P1</span></dt>
+  <dd>A spectrum trading KV-cache size for quality. <strong>MHA</strong>: every Q head has its own K/V (biggest cache).
+  <strong>GQA</strong>: groups of Q heads share one K/V set (today's default — ~¼ cache, near-MHA quality).
+  <strong>MQA</strong>: all Q heads share one K/V (smallest cache, some quality loss). KV-cache size scales with the
+  number of <em>K/V</em> heads, not Q heads.</dd>
+
+  <dt>위치 인코딩 / RoPE <span class="en">Positional encoding / Rotary Position Embedding</span> <span class="phase">P1</span></dt>
+  <dd>Bare attention is permutation-invariant — Q/K/V carry no order, so "동물 길" and "길 동물" look identical.
+  Order must be injected. <strong>RoPE</strong> (today's standard) rotates Q and K by an angle proportional to
+  position, so the Q·K dot product encodes <em>relative distance</em>. Its behavior beyond the trained length is
+  a main cause of long-context breakdown (extended via position interpolation / YaRN).</dd>
+
+  <dt>롱컨텍스트 <span class="en">Long context</span> <span class="phase">P1</span></dt>
+  <dd>Same attention mechanism at any distance, but quality drops far back: softmax dilution over many candidates,
+  <em>lost-in-the-middle</em> (models attend to start/end better than middle), and degradation past the trained
+  length. It is both a memory problem (KV cache ∝ context) and a quality problem.</dd>
+
+  <dt>헤드 특화 <span class="en">Head specialization (interpretability)</span> <span class="phase">P1</span></dt>
+  <dd>Empirically, specific attention heads take on identifiable roles — <em>induction heads</em>
+  ([A][B]…[A]→[B] copying), <em>previous/duplicate-token heads</em>, <em>name-mover heads</em> (do
+  coreference-like routing, IOI circuit), syntactic/positional heads. Found via attention-pattern analysis and
+  causal <em>activation patching</em>. Not all heads are cleanly interpretable (many are polysemantic).</dd>
+
+  <dt>트랜스포머 <span class="en">Transformer</span> <span class="phase">P1</span></dt>
+  <dd>The neural-network architecture built on self-attention (Vaswani et al., 2017, "Attention Is All You Need").
+  The backbone of every modern LLM. Replaced sequential RNNs — parallelizable, good at long-range relations.</dd>
+
+  <dt>KV 캐시 <span class="en">KV cache</span> <span class="phase">P1</span></dt>
+  <dd>A store of the Key and Value vectors of all past tokens. Since a past token's K/V never change,
+  caching them avoids recomputing the whole context each step — turning a quadratic cost into linear.
+  Grows with <strong>sequence length × batch size</strong> and becomes the second big memory consumer
+  after weights; it caps how large a batch you can serve.</dd>
+
+  <dt>프리필 vs 디코드 <span class="en">Prefill vs Decode</span> <span class="phase">P1</span></dt>
+  <dd><em>Prefill</em>: process the whole prompt at once (parallel, compute-bound, fast) and fill the KV cache.
+  Sets <strong>TTFT</strong> (time to first token). <em>Decode</em>: generate tokens one by one (sequential,
+  memory-bound, the dominant cost), reading past K/V from the cache and appending the new token's.
+  Sets <strong>TPOT</strong> (time per output token).</dd>
+
+  <dt>배칭 <span class="en">Batching</span> <span class="phase">P1</span></dt>
+  <dd>Serving multiple requests together so a single weight-read produces tokens for many users at once —
+  the main lever for throughput. Amortizes the expensive weight-read across N users (per-token memory cost ÷ N).
+  Bounded by KV-cache memory (batch × context).</dd>
+
+  <dt>처리량 vs 지연 <span class="en">Throughput vs Latency</span> <span class="phase">P1</span></dt>
+  <dd><em>Throughput</em>: total tokens/sec across all users — sets cost-per-user; batching raises it.
+  <em>Latency</em>: one user's speed — TTFT (first token) and TPOT (per token). Batching leaves per-user
+  latency ~flat while lifting throughput, until compute/memory limits bite.</dd>
+
+  <dt>정적 vs 연속 배칭 <span class="en">Static vs Continuous batching</span> <span class="phase">P1</span></dt>
+  <dd><em>Static</em>: fix the batch, wait for all to finish — finished users' slots sit idle (wasted GPU).
+  <em>Continuous</em> (iteration-level): as a request finishes, a queued one takes its slot, keeping the batch
+  full. ~2–4× throughput, better tail latency. The default in vLLM/SGLang. Caveat: <em>prefill stalling</em>.</dd>
+
+  <dt>PagedAttention <span class="en">PagedAttention</span> <span class="phase">P1</span></dt>
+  <dd>vLLM's technique to store the KV cache in fixed-size pages (like OS virtual memory) instead of one big
+  contiguous block, eliminating fragmentation waste and letting more requests fit — i.e. bigger batches.
+  A <em>memory-axis</em> optimization (distinct from chunked prefill's <em>compute/time-axis</em> one).</dd>
+
+  <dt>Prefill stalling <span class="en">Prefill stalling</span> <span class="phase">P1</span></dt>
+  <dd>When a new request's (heavy, compute-bound) prefill runs in one iteration, that iteration becomes long
+  and all in-flight decode users freeze until it ends — a latency spike. It is a <strong>compute-time</strong>
+  problem (the step is too long), not a memory-capacity one. The serving analog of head-of-line blocking.</dd>
+
+  <dt>Chunked prefill <span class="en">Chunked prefill</span> <span class="phase">P1</span></dt>
+  <dd>Split a prompt's prefill into fixed-size chunks (a per-iteration compute budget) and interleave a chunk
+  with ongoing decodes each step. Caps step length → no stalling; and mixing compute-bound prefill with
+  memory-bound decode fills both resources (SMT-like). Knob: chunk size trades new-request TTFT vs decode
+  stability. Origin: SARATHI (2023); default in vLLM/SGLang.</dd>
+
+  <dt>양자화 <span class="en">Quantization</span> <span class="phase">P2</span></dt>
+  <dd>Storing weights/activations with fewer bits per number (FP16 → FP8 → FP4/INT4) by rounding a continuous
+  range onto a few representable levels via a scale factor. Reduces <em>bytes per parameter</em> (not the
+  parameter count). Double win: less memory traffic <em>and</em> faster low-precision tensor-core math. Cost:
+  accuracy loss, worst on math/code/reasoning at 4-bit.</dd>
+
+  <dt>부동소수점 포맷 <span class="en">FP16 / FP8 (E4M3, E5M2) / FP4</span> <span class="phase">P2</span></dt>
+  <dd>Number formats split into sign · exponent · mantissa. <strong>FP16/BF16</strong> = 2 bytes (baseline).
+  <strong>FP8</strong> = 1 byte, two flavors: <em>E4M3</em> (more mantissa → precision, ±448) and
+  <em>E5M2</em> (more exponent → range). <strong>FP4</strong> = 0.5 byte (~16 levels). Exponent trades range,
+  mantissa trades precision.</dd>
+
+  <dt>텐서 코어 <span class="en">Tensor Core</span> <span class="phase">P2</span></dt>
+  <dd>Specialized GPU units that do matrix multiply-accumulate very fast, and <em>faster still at lower precision</em>
+  — this is why quantization also speeds up compute. Blackwell's headline "15 PFLOPS" is an FP4 tensor-core number.
+  (Blackwell's 5th-gen tensor-core instruction = <em>tcgen05</em>, covered in Phase 4.)</dd>
+
+  <dt>weight-only vs weight+activation <span class="en">Quantization scope</span> <span class="phase">P2</span></dt>
+  <dd><em>Weight-only</em>: quantize only stored weights (helps memory), compute in higher precision — safer.
+  <em>Weight+activation</em>: quantize the running activations too — unlocks low-precision tensor-core math but
+  is harder (activations have outliers). GPTQ/AWQ are popular 4-bit weight-only methods.</dd>
+
+  <dt>MoE <span class="en">Mixture of Experts</span> <span class="phase">P2</span></dt>
+  <dd>A model split into many "expert" sub-networks; each token activates only a few (e.g. top-8).
+  GLM-5.2 is 753B params but only a fraction runs per token. Detailed in Phase 2.</dd>
+
+  <dt>스펙큘러티브 디코딩 <span class="en">Speculative decoding</span> <span class="phase">P2</span></dt>
+  <dd><em>Draft-then-verify</em>: a cheap predictor drafts the next K tokens, then the big model verifies
+  all K in <strong>one</strong> parallel forward pass (compute-bound, like prefill) — so one expensive
+  weight-read advances multiple tokens. The min(1, p/q) acceptance rule makes the output distribution
+  <strong>identical</strong> to the big model decoding alone (lossless — unlike quantization). A bad draft
+  only makes it slower, never wrong. (Leviathan et al., 2022.)</dd>
+
+  <dt>MTP <span class="en">Multi-Token Prediction</span> <span class="phase">P2</span></dt>
+  <dd>Speculative decoding <em>without a separate draft model</em>: the big model carries extra heads that
+  predict future tokens, and their output is the draft (self-speculation). Used by GLM/DeepSeek-style
+  models — this is what the Sionic post tunes. Same lossless verify rule; the gain still lives or dies
+  by acceptance length.</dd>
+
+  <dt>Acceptance length <span class="en">Acceptance length</span> <span class="phase">P2</span></dt>
+  <dd>Average number of tokens confirmed per big-model pass. The single number that sets the speculative/MTP
+  gain: <em>bytes per token = bytes per pass ÷ acceptance length</em> — exactly the Sionic post's
+  6.65 → 1.9 → 0.67 GB/token. Depends on draft quality (quantization accuracy loss lowers it — the
+  quantization↔MTP coupling) and on workload predictability (code ↑, creative text ↓).</dd>
+
+  <dt class="small">tcgen05 · TMEM · Split-K · FP8/FP4 <span class="phase">P4</span></dt>
+  <dd class="small">Blackwell tensor-core kernel machinery from the Sionic post — defined when we reach the CUDA phase.</dd>
+</dl>
+
+<p class="ask">📌 This glossary is authoritative. If a lesson seems to use a term differently, ask your teacher — it's a bug to fix.</p>
+</body>
+</html>
