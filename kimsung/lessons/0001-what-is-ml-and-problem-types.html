@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>레슨 1 — 머신러닝이 뭐고, 문제를 어떻게 번역하나</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<p class="kicker">레슨 1 · Phase 0 — 지도 만들기</p>
+<h1>머신러닝이 뭐고,<br>문제를 어떻게 "번역"하나</h1>
+<p class="subtitle">수학은 한 줄도 안 나옵니다. 오늘의 목표는 딱 하나 — 현실의 문제를 보고 "이건 ML로 치면 무슨 종류의 문제다"라고 말할 수 있게 되는 것.</p>
+
+<div class="callout key">
+  <span class="label">이 레슨을 마치면 할 수 있는 것</span>
+  업무에서 "이거 머신러닝으로 되나요?" 하는 문제를 만났을 때, <strong>회귀 / 이진 분류 / 다중 분류</strong>
+  중 무엇인지 자신 있게 골라낼 수 있습니다. 이게 실무 ML의 첫 단추입니다.
+</div>
+
+<h2>1. 머신러닝이란: "규칙을 짜지 말고, 배우게 하자"</h2>
+
+<p>보통 프로그램은 개발자가 규칙을 <em>전부</em> 적어줍니다. "제목에 '광고'가 있으면 스팸, 링크가 5개 넘으면 스팸…"
+이런 걸 <strong>명시적 프로그래밍</strong>(explicit programming)이라고 해요. 훌륭하지만, 경우의 수가 너무 많은 문제 —
+스팸 필터, 자율주행 — 에서는 규칙을 손으로 다 적는 게 불가능합니다.</p>
+
+<p>그래서 1959년 아서 새뮤얼이라는 사람이 이런 생각을 합니다:
+<strong>"규칙을 우리가 짜지 말고, 데이터를 잔뜩 보여줘서 프로그램이 스스로 규칙을 배우게 하면 어떨까?"</strong>
+이게 바로 <a href="../reference/glossary.html#basics">머신러닝</a>입니다.<sup class="cite">1</sup></p>
+
+<div class="callout">
+  <span class="label">한 줄 요약</span>
+  전통 프로그래밍은 <em>규칙 + 데이터 → 답</em>. 머신러닝은 거꾸로 <em>데이터 + 답 → 규칙(모델)</em>.
+</div>
+
+<h2>2. 지도 학습 vs 비지도 학습</h2>
+
+<p>배우려면 데이터가 필요하죠. 그 데이터에 <strong>정답이 붙어 있느냐</strong>로 두 갈래가 갈립니다.</p>
+
+<ul>
+  <li><strong><a href="../reference/glossary.html#learning-types">지도 학습</a></strong>(Supervised): 정답표가 붙은 데이터로 배움.
+  고양이 사진마다 "cat" 딱지를 붙여 학습 → 새 사진을 맞힘. <em>감독관이 정답을 알려주며 가르치는</em> 그림이라 "지도".</li>
+  <li><strong>비지도 학습</strong>(Unsupervised): 정답 없이, 비슷한 것끼리 스스로 묶음.
+  구글 뉴스가 비슷한 기사끼리 자동 그룹핑하는 것.</li>
+</ul>
+
+<p>이 코스는 실무에서 가장 흔한 <strong>지도 학습</strong>을 주로 다룹니다. 여기서 두 글자만 기억하세요:
+입력은 <code>x</code>(<a href="../reference/glossary.html#supervised-kinds">특징/피처</a>, 예: 공부한 시간),
+정답은 <code>y</code>(레이블, 예: 시험 점수). 이 <code>(x, y)</code> 짝들의 모음이
+<strong>트레이닝 데이터셋</strong>이고, 이걸로 모델을 학습시킵니다.</p>
+
+<h2>3. 오늘의 핵심 기술: 문제를 세 종류로 번역하기</h2>
+
+<p>지도 학습 문제는 <strong>"정답 y가 어떻게 생겼나"</strong>만 보면 셋 중 하나로 딱 나뉩니다.
+이 질문 하나만 던지면 됩니다 — <strong>"답이 뭐야?"</strong></p>
+
+<div class="calc">
+<table>
+  <tr><td>답이 <strong>넓은 범위의 숫자</strong>다 ("얼마나?")</td><td>→ 회귀 (Regression)</td></tr>
+  <tr><td>답이 <strong>둘 중 하나</strong>다 ("이거야 저거야?")</td><td>→ 이진 분류 (Binary)</td></tr>
+  <tr><td>답이 <strong>여럿 중 하나</strong>다 ("어느 것?")</td><td>→ 다중 분류 (Multi-class)</td></tr>
+</table>
+</div>
+
+<p>같은 "시험" 문제도 정답을 어떻게 정의하느냐에 따라 종류가 바뀝니다.<sup class="cite">1</sup> 이게 핵심 감각이에요:</p>
+
+<figure>
+<div class="calc">
+<table>
+  <tr><td>공부 시간 → <strong>몇 점</strong>? (0~100)</td><td>회귀</td></tr>
+  <tr><td>공부 시간 → <strong>합격 / 불합격</strong>?</td><td>이진 분류</td></tr>
+  <tr><td>공부 시간 → <strong>학점 A·B·C·D·F</strong>?</td><td>다중 분류</td></tr>
+</table>
+</div>
+<figcaption>입력(공부 시간)은 똑같아도, "정답의 모양"이 문제 종류를 결정한다.</figcaption>
+</figure>
+
+<div class="callout">
+  <span class="label">업무에 대입해 보기</span>
+  "다음 달 매출 예상액" → 숫자니까 <strong>회귀</strong>. "이 고객이 이탈할까 말까" → 둘 중 하나니까 <strong>이진 분류</strong>.
+  "이 문의는 환불·배송·기타 중 어디로 보낼까" → 여럿 중 하나니까 <strong>다중 분류</strong>.
+</div>
+
+<h2>4. 직접 해보기 (즉시 채점)</h2>
+
+<div class="quiz" data-answer="1">
+  <div class="q">Q1. 정답(레이블)이 붙어 있는 데이터로 배우는 학습을 무엇이라 부를까요?</div>
+  <button class="opt">스스로 묶는 비지도 학습</button>
+  <button class="opt">정답 배우는 지도 학습</button>
+  <div class="feedback"
+    data-correct="맞습니다. 정답표(레이블)가 있으면 지도(Supervised) 학습."
+    data-wrong="아쉬워요. 정답이 붙어 있으면 '지도' 학습입니다. 비지도는 정답 없이 묶는 것."></div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <div class="q">Q2. "내일 이 가게의 매출액(원)은 얼마일까?" 이건 어떤 문제일까요?</div>
+  <button class="opt">둘 중 하나 고르는 이진 분류</button>
+  <button class="opt">여럿 중 하나 뽑는 다중 분류</button>
+  <button class="opt">넓은 숫자 맞히는 회귀 문제</button>
+  <div class="feedback"
+    data-correct="정확합니다. 답이 '넓은 범위의 숫자'라 회귀(Regression)."
+    data-wrong="다시 볼까요. 답이 특정 몇 개가 아니라 '넓은 범위의 숫자'라면 회귀입니다."></div>
+</div>
+
+<div class="quiz" data-answer="0">
+  <div class="q">Q3. "이 메일은 스팸일까, 정상(ham)일까?" 이건 어떤 문제일까요?</div>
+  <button class="opt">둘 중 하나 뽑는 이진 분류</button>
+  <button class="opt">넓은 숫자 맞히는 회귀 문제</button>
+  <button class="opt">여럿 중 하나 뽑는 다중 분류</button>
+  <div class="feedback"
+    data-correct="맞아요. 스팸 or 정상, 딱 두 갈래니까 이진 분류(Binary Classification)."
+    data-wrong="아쉬워요. 답이 '스팸/정상' 두 개뿐이니 이진 분류입니다."></div>
+</div>
+
+<h2>5. 원본으로 확인하기 (1차 출처)</h2>
+<p>오늘 내용은 김성훈 교수님 강의 <strong>lec 01</strong>을 압축한 것입니다. 12분짜리이고, 위 내용을 교수님 목소리로 한 번 더 들으면
+머릿속에 훨씬 오래 남습니다 (이걸 <em>저장 강도</em>라고 해요). 오늘 밤이나 내일, 딱 한 번 보는 걸 추천합니다.</p>
+<p>▶ <a href="https://www.youtube.com/watch?v=qPMeuL2LIqY" target="_blank" rel="noopener">
+lec 01 — 기본적인 Machine Learning의 용어와 개념 설명 (YouTube, 한국어)</a></p>
+
+<div class="ask">
+  <strong>💬 막히면 저(선생님)에게 물어보세요.</strong> "지도/비지도가 아직 헷갈려요", "제 업무 문제 X는 무슨 종류예요?",
+  "회귀랑 분류를 왜 굳이 나눠요?" — 무엇이든 좋습니다. 이해가 될 때까지 다르게 설명해 드릴게요.
+</div>
+
+<hr>
+<p class="refs">
+<strong>출처</strong><br>
+<span class="mono">1.</span> 김성훈, 「ML lec 01 — 기본적인 Machine Learning의 용어와 개념 설명」, 모두를 위한 머신러닝/딥러닝.
+<a href="https://www.youtube.com/watch?v=qPMeuL2LIqY">youtube.com/watch?v=qPMeuL2LIqY</a>
+</p>
+
+<div class="lesson-nav">
+  <span><a href="../index.html">🏠 코스 허브</a></span>
+  <span><a href="../reference/glossary.html">📖 용어집</a></span>
+  <span>다음: 레슨 2 — 선형 회귀 (준비 중)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

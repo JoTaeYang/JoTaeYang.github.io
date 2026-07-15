@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>용어집 — 모두를 위한 ML</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .term { border-bottom: 1px solid var(--rule); padding: 0.9rem 0; }
+  .term:last-child { border-bottom: none; }
+  .term .ko { font-weight: 700; font-size: 1.05rem; }
+  .term .en { color: var(--muted); font-family: system-ui, sans-serif; font-size: 0.82rem; letter-spacing: 0.02em; }
+  .term .def { margin: 0.35rem 0 0; }
+  .term .ex { font-size: 0.86rem; color: var(--muted); font-style: italic; margin-top: 0.25rem; }
+  .group { scroll-margin-top: 1rem; }
+  @media print { a { color: var(--ink); border: none; } body { margin: 1rem auto; } }
+</style>
+</head>
+<body>
+<p class="kicker">참조 문서 · 두고두고 보기</p>
+<h1>용어집</h1>
+<p class="subtitle">이 코스에서 쓰는 말들. 레슨마다 여기 정의를 따릅니다. 한글 옆의 영어는 실무에서 만날 표기입니다.</p>
+
+<h2 class="group" id="basics">기본</h2>
+
+<div class="term">
+  <span class="ko">머신러닝</span> <span class="en">Machine Learning · ML</span>
+  <p class="def">사람이 규칙을 일일이 짜주는 대신, <strong>데이터를 보고 프로그램이 스스로 규칙을 배우는</strong> 방식.
+  1959년 아서 새뮤얼(Arthur Samuel)이 제안.</p>
+  <p class="ex">예: 스팸 메일을 "이런 단어 있으면 스팸"이라고 일일이 정하는 대신, 스팸/정상 메일을 잔뜩 보여주고 스스로 판단하게 함.</p>
+</div>
+
+<div class="term">
+  <span class="ko">명시적 프로그래밍</span> <span class="en">Explicit Programming</span>
+  <p class="def">개발자가 "이 경우엔 이렇게, 저 경우엔 저렇게"를 <strong>전부 직접</strong> 정해 놓는 전통적 방식.
+  규칙이 너무 많은 문제(스팸, 자율주행)에선 한계.</p>
+</div>
+
+<div class="term">
+  <span class="ko">모델</span> <span class="en">Model</span>
+  <p class="def">데이터로 학습한 결과물. 새 입력을 주면 답(예측)을 내놓는 "학습된 프로그램".</p>
+</div>
+
+<h2 class="group" id="learning-types">학습의 종류</h2>
+
+<div class="term">
+  <span class="ko">지도 학습</span> <span class="en">Supervised Learning</span>
+  <p class="def">정답표(<strong>레이블</strong>)가 달린 데이터로 배우는 방식. "감독관(supervisor)"이 정답을 알려주며 가르치는 그림.
+  이 코스에서 주로 다루는 것.</p>
+  <p class="ex">예: 고양이 사진마다 "cat" 딱지를 붙여서 학습 → 새 사진이 고양이인지 맞힘.</p>
+</div>
+
+<div class="term">
+  <span class="ko">비지도 학습</span> <span class="en">Unsupervised Learning</span>
+  <p class="def">정답 레이블 없이, 데이터 안의 <strong>비슷한 것끼리 스스로 묶는</strong> 방식.</p>
+  <p class="ex">예: 구글 뉴스가 비슷한 기사끼리 자동으로 그룹핑.</p>
+</div>
+
+<div class="term">
+  <span class="ko">레이블</span> <span class="en">Label</span>
+  <p class="def">데이터에 붙은 <strong>정답</strong>. 지도 학습에서 보통 <code>y</code>로 표기.</p>
+</div>
+
+<div class="term">
+  <span class="ko">특징 / 피처</span> <span class="en">Feature</span>
+  <p class="def">예측에 쓰는 <strong>입력값</strong>. 보통 <code>x</code>로 표기. (예: "공부한 시간")</p>
+</div>
+
+<div class="term">
+  <span class="ko">트레이닝 데이터셋</span> <span class="en">Training Data Set</span>
+  <p class="def">모델을 학습시키는 데 쓰는, <strong>입력(x)과 정답(y)이 짝지어진</strong> 데이터 모음.</p>
+</div>
+
+<div class="term">
+  <span class="ko">테스트 값</span> <span class="en">x_test</span>
+  <p class="def">학습이 끝난 모델에게 "이건 답이 뭐야?"라고 물어보는, <strong>정답을 모르는 새 입력</strong>.</p>
+</div>
+
+<h2 class="group" id="supervised-kinds">지도 학습의 세 갈래</h2>
+
+<div class="term">
+  <span class="ko">회귀</span> <span class="en">Regression</span>
+  <p class="def">답이 <strong>넓은 범위의 숫자</strong>인 문제. "얼마나?"를 맞힘.</p>
+  <p class="ex">예: 공부 시간 → 시험 점수(0~100점) 예측.</p>
+</div>
+
+<div class="term">
+  <span class="ko">분류 (이진 분류)</span> <span class="en">Classification · Binary</span>
+  <p class="def">답이 <strong>두 개 중 하나</strong>인 문제. "이거야 저거야?"를 맞힘.</p>
+  <p class="ex">예: 합격(pass) vs 불합격(non-pass), 스팸 vs 정상(ham).</p>
+</div>
+
+<div class="term">
+  <span class="ko">다중 분류</span> <span class="en">Multi-label / Multi-class Classification</span>
+  <p class="def">답이 <strong>여러 개 중 하나</strong>인 문제.</p>
+  <p class="ex">예: 학점 A·B·C·D·F 중 하나 예측.</p>
+</div>
+
+<hr>
+<p class="small">이 코스: 김성훈 「모두를 위한 머신러닝/딥러닝」 정리 · <a href="../index.html">🏠 코스 허브</a></p>
+</body>
+</html>

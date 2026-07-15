@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>모두를 위한 ML — 코스 허브</title>
+<link rel="stylesheet" href="assets/style.css">
+<style>
+  .phase { margin: 2.2rem 0; }
+  .phase h2 { margin-bottom: 0.2rem; }
+  .phase .goal { color: var(--muted); font-size: 0.92rem; margin: 0 0 0.8rem; }
+  ol.lessons { list-style: none; padding: 0; margin: 0; }
+  ol.lessons li { display: flex; gap: 0.9rem; align-items: baseline; padding: 0.55rem 0.2rem; border-bottom: 1px solid var(--rule); }
+  ol.lessons .num { font-family: "SF Mono", Menlo, monospace; font-size: 0.78rem; color: var(--accent); min-width: 2.6rem; }
+  ol.lessons .what { color: var(--muted); font-size: 0.88rem; }
+  ol.lessons li.todo { color: var(--muted); }
+  ol.lessons li.todo .num { color: var(--muted); }
+  .status { font-family: system-ui, sans-serif; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .status.done { color: var(--good); }
+  .status.next { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<p class="kicker">Course Hub</p>
+<h1>모두를 위한 머신러닝 — 생초보부터</h1>
+<p class="subtitle">미션: <strong>업무·커리어를 위해</strong> ML을 제대로 이해하고 다루기. 교재: 김성훈 교수님 「모두를 위한 머신러닝/딥러닝」. 수학은 그림·직관으로 먼저, 수식은 이야기로 감싸서.</p>
+
+<div class="callout key">
+  <span class="label">코스를 관통하는 한 문장</span>
+  머신러닝은 규칙을 짜는 게 아니라 <strong>데이터로 규칙을 배우게</strong> 하는 것 —
+  이 코스는 그 "배운다"가 실제로 무슨 일인지를 선형회귀 → 분류 → 소프트맥스로 한 줄기로 풀어냅니다.
+</div>
+
+<div class="phase">
+  <h2>Phase 0 — 지도 만들기 <span class="status next">◉ 진행 중</span></h2>
+  <p class="goal">ML이 뭔가, 그리고 현실 문제를 회귀/분류로 번역하는 감각. (수학 없음)</p>
+  <ol class="lessons">
+    <li><span class="num">L1</span><span><a href="lessons/0001-what-is-ml-and-problem-types.html">머신러닝이 뭐고, 문제를 어떻게 번역하나</a></span><span class="what">— 지도/비지도, 회귀·이진·다중 분류 구분</span></li>
+  </ol>
+</div>
+
+<div class="phase">
+  <h2>Phase 1 — 선형 회귀 <span class="status">예정</span></h2>
+  <p class="goal">"학습한다 = cost를 줄인다"의 의미와 경사하강법의 직관. (lec 02~03, lab 02~03)</p>
+  <ol class="lessons">
+    <li class="todo"><span class="num">L2</span><span>가설(H)과 cost — "선을 긋는다"는 것 (예정)</span></li>
+    <li class="todo"><span class="num">L3</span><span>경사하강법 — 안대 쓰고 언덕 내려가기 (예정)</span></li>
+  </ol>
+</div>
+
+<div class="phase">
+  <h2>Phase 2 — 여러 입력 <span class="status">예정</span></h2>
+  <p class="goal">입력이 여럿일 때(multi-variable), 행렬로 보기, 파일에서 데이터 읽기. (lec 04, lab 04)</p>
+</div>
+
+<div class="phase">
+  <h2>Phase 3 — 분류 <span class="status">예정</span></h2>
+  <p class="goal">로지스틱 회귀, sigmoid, 분류의 cost. (lec 05, lab 05)</p>
+</div>
+
+<div class="phase">
+  <h2>Phase 4 — 다중 분류 <span class="status">예정</span></h2>
+  <p class="goal">softmax, one-hot, cross-entropy. 이후 캡스톤: 한 문제를 세 방식으로 프레이밍. (lec 06, lab 06)</p>
+</div>
+
+<hr>
+
+<h2>참고 자료</h2>
+<ol class="lessons">
+  <li><span class="num">📖</span><span><a href="reference/glossary.html">용어집 (Glossary)</a></span><span class="what">— 코스의 공식 정의; 레슨과 다르면 그게 버그</span></li>
+  <li><span class="num">📄</span><span><a href="MISSION.md">MISSION.md</a> · <a href="RESOURCES.md">RESOURCES.md</a> · <a href="NOTES.md">NOTES.md</a></span><span class="what">— 로드맵 · 원강의 링크 · 티칭 노트</span></li>
+</ol>
+
+<div class="ask">
+  🧑‍🏫 이 페이지를 북마크하세요. 새 레슨이 생길 때마다 여기에 추가됩니다.
+  준비되면 <strong>"다음"</strong>이라고 말씀만 하세요 — 레슨 2(선형 회귀)로 넘어갑니다.
+</div>
+
+</body>
+</html>
