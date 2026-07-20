@@ -96,6 +96,42 @@
   <p class="ex">예: 학점 A·B·C·D·F 중 하나 예측.</p>
 </div>
 
+<h2 class="group" id="linreg">선형 회귀</h2>
+
+<div class="term">
+  <span class="ko">선형 회귀</span> <span class="en">Linear Regression</span>
+  <p class="def">데이터에 <strong>가장 잘 맞는 직선 하나</strong>를 찾는 회귀 방법. "입력이 커지면 출력도 일정하게 커진다"는
+  관계를 직선으로 모델링. 실무에서 가장 기본이자 널리 쓰임.</p>
+</div>
+
+<div class="term">
+  <span class="ko">가설</span> <span class="en">Hypothesis · H(x)</span>
+  <p class="def">데이터에 맞을 거라고 세우는 <strong>선의 식</strong>: <code>H(x) = Wx + b</code>. H(x)는 이 선이 내놓는 예측값.</p>
+</div>
+
+<div class="term">
+  <span class="ko">가중치 (기울기)</span> <span class="en">W · Weight</span>
+  <p class="def">선이 <strong>얼마나 가파른가</strong>. x가 1 늘 때 예측 y가 얼마나 오르는지.</p>
+</div>
+
+<div class="term">
+  <span class="ko">편향 (y절편)</span> <span class="en">b · Bias</span>
+  <p class="def">선이 <strong>세로로 어디 걸려 있나</strong>. x가 0일 때의 예측값.</p>
+</div>
+
+<div class="term">
+  <span class="ko">비용 함수</span> <span class="en">Cost / Loss Function</span>
+  <p class="def">선이 <strong>얼마나 틀렸는가</strong>를 하나의 숫자로. 각 점의 오차 <code>(H(x) − y)</code>를 <strong>제곱해서 평균</strong>낸 값.
+  작을수록 좋은 선. loss라고도 부름.</p>
+  <p class="ex">제곱하는 이유: ① +/− 상쇄 방지, ② 크게 틀린 점에 더 큰 벌점.</p>
+</div>
+
+<div class="term">
+  <span class="ko">최소화</span> <span class="en">Minimize</span>
+  <p class="def">선형 회귀 <strong>학습의 목표</strong>: cost(W, b)를 가장 작게 만드는 W와 b를 찾는 것.
+  그 방법이 경사하강법(다음 레슨).</p>
+</div>
+
 <hr>
 <p class="small">이 코스: 김성훈 「모두를 위한 머신러닝/딥러닝」 정리 · <a href="../index.html">🏠 코스 허브</a></p>
 </body>

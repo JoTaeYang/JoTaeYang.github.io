@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>치트시트 — TensorFlow 선형 회귀 골격</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .map { width:100%; border-collapse:collapse; margin:1.2rem 0; font-size:0.92rem; }
+  .map th, .map td { text-align:left; padding:0.5rem 0.6rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  .map th { font-family:system-ui,sans-serif; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); }
+  .map td:first-child { font-family:"SF Mono",Menlo,monospace; font-size:0.82rem; white-space:nowrap; }
+  @media print { a { color: var(--ink); border: none; } body { margin: 1rem auto; } pre { font-size:0.72rem; } }
+</style>
+</head>
+<body>
+<p class="kicker">참조 문서 · 두고두고 보기</p>
+<h1>TensorFlow 선형 회귀 골격</h1>
+<p class="subtitle">랩(lab)에서 반복되는 5+1단계 뼈대. 다음 랩들도 이 위에 얹힙니다. (김성훈 lab 02 기준 · TensorFlow 1.x 스타일)</p>
+
+<div class="callout">
+  <span class="label">TensorFlow 버전 주의</span>
+  이 코드는 <strong>TF 1.x</strong> 방식입니다(<code>Session</code>·<code>placeholder</code>). 요즘 쓰는 TF 2.x는 문법이 조금 달라요.
+  지금 목표는 <em>실행</em>이 아니라 <em>읽고 개념과 잇는 것</em>이라 이대로 익혀도 좋습니다.
+</div>
+
+<h2>5+1 단계 뼈대</h2>
+<pre><code># 1) 데이터
+x_train = [1, 2, 3]
+y_train = [1, 2, 3]
+
+# 2) 학습으로 찾을 값 W, b  (텐서플로가 스스로 바꿈)
+W = tf.Variable(tf.random_normal([1]), name='weight')
+b = tf.Variable(tf.random_normal([1]), name='bias')
+
+# 3) 가설  H(x) = Wx + b
+hypothesis = x_train * W + b
+
+# 4) 비용  cost = (예측 - 실제)^2 의 평균
+cost = tf.reduce_mean(tf.square(hypothesis - y_train))
+
+# 5) 최소화  (경사하강법)
+optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.01)
+train = optimizer.minimize(cost)
+
+# +1) 실행: 세션 열고 → 변수 초기화 → 반복 학습
+sess = tf.Session()
+sess.run(tf.global_variables_initializer())
+for step in range(2001):
+    sess.run(train)
+    if step % 20 == 0:
+        print(step, sess.run(cost), sess.run(W), sess.run(b))
+</code></pre>
+
+<h2>개념 ↔ 코드 대응표</h2>
+<table class="map">
+  <tr><th>코드</th><th>레슨 개념</th><th>한 줄 뜻</th></tr>
+  <tr><td>tf.Variable(...)</td><td>W, b</td><td>텐서플로가 학습하며 <strong>스스로 바꾸는</strong> 값</td></tr>
+  <tr><td>x_train * W + b</td><td>가설 H(x)=Wx+b</td><td>이 선이 내놓는 <strong>예측</strong></td></tr>
+  <tr><td>tf.square(...)</td><td>오차 제곱</td><td>부호 없애고 큰 오차에 <strong>벌점</strong></td></tr>
+  <tr><td>tf.reduce_mean(...)</td><td>평균</td><td>모든 점의 벌점을 <strong>평균</strong> → cost</td></tr>
+  <tr><td>optimizer.minimize(cost)</td><td>cost 최소화</td><td>cost를 줄이도록 W,b를 <strong>조금씩 이동</strong></td></tr>
+  <tr><td>learning_rate=0.01</td><td>보폭</td><td>한 번에 <strong>얼마나 크게</strong> 이동할지 (다음 레슨)</td></tr>
+  <tr><td>sess.run(train)</td><td>1회 학습</td><td>이 줄이 돌 때마다 W,b가 <strong>한 걸음</strong> 개선</td></tr>
+</table>
+
+<h2>placeholder 변형 (데이터를 나중에 주입)</h2>
+<pre><code>X = tf.placeholder(tf.float32, shape=[None])   # 값은 나중에
+Y = tf.placeholder(tf.float32, shape=[None])
+hypothesis = X * W + b
+# ... train 실행 시 데이터를 feed_dict로 던져줌:
+sess.run([cost, W, b, train], feed_dict={X: [1,2,3], Y: [1,2,3]})
+# 학습된 모델로 예측:
+sess.run(hypothesis, feed_dict={X: [5]})       # → 약 6.1
+</code></pre>
+<p class="small"><code>shape=[None]</code> = 1차원인데 개수는 자유(3개든 100개든). <code>feed_dict</code> = 그때그때 넣어줄 데이터. <code>_</code> = "받긴 하지만 안 쓸 값".</p>
+
+<hr>
+<p class="small">이 코스: 김성훈 「모두를 위한 머신러닝/딥러닝」 정리 · <a href="../index.html">🏠 코스 허브</a> · <a href="glossary.html">📖 용어집</a></p>
+</body>
+</html>

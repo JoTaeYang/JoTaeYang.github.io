@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>레슨 3 — 코드로 보는 선형 회귀 (TensorFlow)</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .pyprimer { width:100%; border-collapse:collapse; font-size:0.9rem; margin:1rem 0; }
+  .pyprimer td { padding:0.4rem 0.6rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  .pyprimer td:first-child { font-family:"SF Mono",Menlo,monospace; font-size:0.82rem; white-space:nowrap; color:var(--accent); }
+  .out { background:#0f1115; color:#d7dae0; border-radius:8px; padding:0.9rem 1.1rem; font-family:"SF Mono",Menlo,monospace;
+         font-size:0.8rem; line-height:1.5; overflow-x:auto; margin:1rem 0; }
+  .out .c { color:#7ee787; } .out .dim { color:#8b949e; }
+  .step-label { font-family:system-ui,sans-serif; font-size:0.72rem; font-weight:700; letter-spacing:0.06em;
+                text-transform:uppercase; color:var(--accent); margin:2rem 0 0.3rem; }
+</style>
+</head>
+<body>
+
+<p class="kicker">레슨 3 · Phase 1 — 선형 회귀 (lab)</p>
+<h1>코드로 보는 선형 회귀<br><span style="font-size:1.3rem;color:var(--muted);font-weight:400">— 개념이 실제 코드가 되는 순간</span></h1>
+<p class="subtitle">이번엔 진짜 코드입니다. 하지만 <strong>한 줄도 실행할 필요 없어요.</strong> 목표는 코드를 읽고 "이 줄은 레슨 2의 무엇"이라고 짚는 것. 결과도 전부 여기 적어뒀습니다.</p>
+
+<div class="callout key">
+  <span class="label">이 레슨을 마치면 할 수 있는 것</span>
+  선형 회귀 TensorFlow 코드를 보고 <strong>데이터 / 가설 / cost / 최소화 / 학습 루프</strong> 다섯 부분을
+  손가락으로 짚으며 "이게 그거예요"라고 설명할 수 있습니다. 코드 읽기의 첫걸음이에요.
+</div>
+
+<h2>0. 먼저: Python·TensorFlow 30초 오리엔테이션</h2>
+<p>Python은 프로그래밍 <em>언어</em>, TensorFlow는 구글이 만든 머신러닝 <em>도구상자</em>(라이브러리)입니다.
+코드에서 <code>tf.</code>로 시작하면 "TensorFlow 도구를 꺼내 쓴다"는 뜻이에요. 이 코드를 읽는 데 필요한 Python은 이게 전부입니다:</p>
+
+<table class="pyprimer">
+  <tr><td>a = 3</td><td><code>a</code>라는 이름에 3을 담는다 (대입).</td></tr>
+  <tr><td>[1, 2, 3]</td><td>값 세 개가 든 목록(리스트).</td></tr>
+  <tr><td>square(x)</td><td>이름(<code>...</code>) — 도구를 <em>호출</em>하고 괄호 안 값을 넘긴다.</td></tr>
+  <tr><td>for step in range(2001):</td><td>0부터 2000까지 <strong>2001번 반복</strong>한다.</td></tr>
+  <tr><td>if step % 20 == 0:</td><td>step이 20의 배수일 때만 (즉 가끔) 실행.</td></tr>
+  <tr><td>print(...)</td><td>괄호 안 값을 화면에 출력.</td></tr>
+</table>
+
+<p>이제 코드를 다섯 조각으로 끊어 읽습니다. 각 조각은 <a href="0002-hypothesis-and-cost.html">레슨 2</a>에서 이미 배운 개념이에요.</p>
+
+<div class="step-label">조각 1 — 데이터</div>
+<pre><code>x_train = [1, 2, 3]
+y_train = [1, 2, 3]</code></pre>
+<p>레슨 2의 그 데이터 그대로예요: (1,1) (2,2) (3,3). <code>x</code>는 입력(피처), <code>y</code>는 정답.</p>
+
+<div class="step-label">조각 2 — 찾아야 할 값 W와 b</div>
+<pre><code>W = tf.Variable(tf.random_normal([1]), name='weight')
+b = tf.Variable(tf.random_normal([1]), name='bias')</code></pre>
+<p><code>W</code>(기울기)와 <code>b</code>(y절편)를 <strong><a href="../reference/glossary.html#linreg">Variable</a></strong>로 선언합니다.
+Variable은 "텐서플로가 <em>학습하면서 스스로 바꾸는</em> 값"이라는 뜻이에요. 처음엔 정답을 모르니 <code>random_normal</code>로
+<strong>아무 랜덤 값</strong>이나 넣고 시작합니다. 학습이 이걸 바른 값으로 밀어줄 거예요.</p>
+
+<div class="step-label">조각 3 — 가설 H(x) = Wx + b</div>
+<pre><code>hypothesis = x_train * W + b</code></pre>
+<div class="callout"><span class="label">이건 레슨 2의 바로 그것</span>
+  <code>x * W + b</code> = <code>H(x) = Wx + b</code>. 글자 그대로 옮긴 거예요. 이 선이 내놓는 <strong>예측</strong>.</div>
+
+<div class="step-label">조각 4 — 비용 cost</div>
+<pre><code>cost = tf.reduce_mean(tf.square(hypothesis - y_train))</code></pre>
+<p>레슨 2의 cost 공식을 안쪽부터 읽어보세요:</p>
+<ul>
+  <li><code>hypothesis - y_train</code> → 오차 (예측 − 실제)</li>
+  <li><code>tf.square(...)</code> → 오차를 <strong>제곱</strong> (부호 없애고 큰 오차에 벌점)</li>
+  <li><code>tf.reduce_mean(...)</code> → 전부 <strong>평균</strong> → 숫자 하나 = cost</li>
+</ul>
+
+<div class="step-label">조각 5 — cost 최소화</div>
+<pre><code>optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.01)
+train = optimizer.minimize(cost)</code></pre>
+<p>레슨 2 마지막의 <em>"cost를 가장 작게 만드는 W, b를 찾아라"</em>가 이 두 줄입니다.
+방법은 <strong>경사하강법(Gradient Descent)</strong> — <em>다음 레슨</em>에서 "안대 쓰고 언덕 내려가기"로 풀어드릴게요.
+지금은 <strong>"cost를 줄여주는 마법 버튼"</strong> 정도로 봐도 충분합니다.<sup class="cite">1</sup>
+<code>learning_rate</code>(보폭)만 눈에 담아두세요.</p>
+
+<div class="step-label">실행 — 세션 열고 2001번 반복 학습</div>
+<pre><code>sess = tf.Session()
+sess.run(tf.global_variables_initializer())   # Variable 초기화(필수)
+for step in range(2001):
+    sess.run(train)                            # ← 이 줄이 돌 때마다 W,b가 한 걸음 개선
+    if step % 20 == 0:
+        print(step, sess.run(cost), sess.run(W), sess.run(b))</code></pre>
+<p>TensorFlow는 코드를 짜자마자 계산하지 않고, 먼저 <strong>그래프(설계도)</strong>를 만든 뒤
+<code>sess.run(...)</code>으로 "실행" 버튼을 눌러야 돌아갑니다. <code>train</code>을 2001번 실행하면
+그때마다 W와 b가 조금씩 좋아져요.<sup class="cite">1</sup></p>
+
+<h2>예상 출력 — cost는 0으로, W는 1로, b는 0으로</h2>
+<p>실행하면 이런 흐름이 찍힙니다. (랜덤 시작값이라 <em>숫자는 매번 조금씩 달라도</em>, <strong>수렴하는 방향은 항상 같아요</strong>.)</p>
+
+<div class="out">
+<span class="dim">step&nbsp;&nbsp;&nbsp;&nbsp;cost&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;W&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;b</span>
+   0&nbsp;&nbsp;&nbsp;&nbsp;2.09&nbsp;&nbsp;&nbsp;&nbsp;[1.645]&nbsp;&nbsp;[ 0.057]
+  20&nbsp;&nbsp;&nbsp;&nbsp;0.36&nbsp;&nbsp;&nbsp;&nbsp;[1.300]&nbsp;&nbsp;[-0.050]
+ 100&nbsp;&nbsp;&nbsp;&nbsp;0.051&nbsp;&nbsp;&nbsp;[1.130]&nbsp;&nbsp;[-0.060]
+ 500&nbsp;&nbsp;&nbsp;&nbsp;0.0015&nbsp;&nbsp;[1.030]&nbsp;&nbsp;[-0.030]
+2000&nbsp;&nbsp;&nbsp;&nbsp;<span class="c">0.00001</span>&nbsp;[<span class="c">1.004</span>]&nbsp;&nbsp;[<span class="c">-0.009</span>]
+</div>
+
+<p>읽는 법: 맨 왼쪽은 <strong>학습 횟수</strong>. 처음엔 랜덤이라 cost가 크고 W·b가 엉뚱하죠(2.09). 그런데 반복할수록
+<strong>cost가 0으로 쪼그라들고</strong>, <strong>W는 1에</strong>, <strong>b는 0에</strong> 착 달라붙습니다.<sup class="cite">1</sup>
+우리가 눈으로 "정답은 W=1, b=0"이라 했던 그 선을, 기계가 <em>스스로</em> 찾아낸 거예요. 이게 "학습됐다"의 실체입니다.</p>
+
+<h2>보너스 — 학습된 모델로 예측하기</h2>
+<p>데이터를 조금 바꿔 (1,2.1)(2,3.1)(3,4.1)(4,5.1)(5,6.1)로 학습시키면, 정답 선은 <code>W=1, b=1.1</code>.
+학습 뒤 새 <code>x</code>를 넣어 예측하면:</p>
+<pre><code>print(sess.run(hypothesis, feed_dict={X: [5]}))
+print(sess.run(hypothesis, feed_dict={X: [2.5]}))
+print(sess.run(hypothesis, feed_dict={X: [1.5, 3.5]}))</code></pre>
+<div class="out">
+[<span class="c">6.1006</span>]&nbsp;&nbsp;&nbsp;&nbsp;<span class="dim"># 5 × 1 + 1.1 ≈ 6.1</span>
+[<span class="c">3.5998</span>]&nbsp;&nbsp;&nbsp;&nbsp;<span class="dim"># 2.5 × 1 + 1.1 ≈ 3.6</span>
+[<span class="c">2.5997 4.5999</span>]&nbsp;<span class="dim"># 두 개 동시에</span>
+</div>
+<p>학습 데이터에 없던 <code>x=5, 2.5</code>도 그럴듯하게 맞힙니다 — 이게 회귀 모델을 "쓴다"는 것. 자세한 골격은
+<a href="../reference/tensorflow-linreg.html">📄 TF 선형회귀 치트시트</a>에 정리해뒀어요(다음 랩에서 계속 씁니다).</p>
+
+<h2>직접 해보기 (즉시 채점)</h2>
+
+<div class="quiz" data-answer="0">
+  <div class="q">Q1. <code>hypothesis = x_train * W + b</code> 는 레슨 2의 무엇일까요?</div>
+  <button class="opt">가설 H(x)=Wx+b 식</button>
+  <button class="opt">비용 cost 함수 식</button>
+  <button class="opt">학습률 설정 식</button>
+  <div class="feedback"
+    data-correct="맞습니다. x*W+b 는 곧 H(x)=Wx+b, 예측을 내놓는 가설이에요."
+    data-wrong="아쉬워요. x*W+b 는 예측을 내놓는 '가설 H(x)=Wx+b' 입니다."></div>
+</div>
+
+<div class="quiz" data-answer="1">
+  <div class="q">Q2. <code>tf.square(hypothesis - y_train)</code> 에서 제곱이 하는 일은?</div>
+  <button class="opt">여러 값을 평균 계산</button>
+  <button class="opt">부호 없애고 오차 강조</button>
+  <button class="opt">기울기 W를 조정함</button>
+  <div class="feedback"
+    data-correct="정확합니다. 제곱은 +/− 상쇄를 막고 큰 오차에 벌점을 줍니다."
+    data-wrong="다시 볼까요. 평균은 reduce_mean 담당. 제곱은 부호 상쇄 방지 + 큰 오차 강조."></div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <div class="q">Q3. 데이터 x=y=(1,2,3)로 학습이 끝나면 W와 b는?</div>
+  <button class="opt">W는 2로 b는 2로 감</button>
+  <button class="opt">W는 0으로 b는 1로 감</button>
+  <button class="opt">W는 1로 b는 0으로 감</button>
+  <div class="feedback"
+    data-correct="맞아요. cost가 0에 수렴하며 W→1, b→0. 기계가 정답 선을 찾아냈어요."
+    data-wrong="아쉬워요. y=x 데이터라 정답 선은 W=1, b=0. cost가 0으로 수렴합니다."></div>
+</div>
+
+<h2>원본으로 확인하기 (1차 출처)</h2>
+<p>오늘 코드는 김성훈 교수님 <strong>lab 02</strong> 그대로입니다. 교수님이 코드를 한 줄씩 짚으며 출력이 수렴하는 걸
+보여주는데, 실행 환경이 없어도 <em>보는 것만으로</em> 감이 확 옵니다.</p>
+<p>▶ <a href="https://www.youtube.com/watch?v=mQGwjrStQgg" target="_blank" rel="noopener">
+lab 02 — TensorFlow로 간단한 Linear Regression 구현 (YouTube, 한국어)</a></p>
+
+<div class="ask">
+  <strong>💬 막히면 저(선생님)에게 물어보세요.</strong> "Session이 왜 필요해요?", "Variable이랑 그냥 변수랑 뭐가 달라요?",
+  "나중에 진짜 실행해보려면 뭐부터 깔아요?" — 무엇이든요. Python이 처음이라도 천천히 같이 봐요.
+</div>
+
+<hr>
+<p class="refs">
+<strong>출처</strong><br>
+<span class="mono">1.</span> 김성훈, 「ML lab 02 — TensorFlow로 간단한 Linear Regression 구현」, 모두를 위한 머신러닝/딥러닝.
+<a href="https://www.youtube.com/watch?v=mQGwjrStQgg">youtube.com/watch?v=mQGwjrStQgg</a>
+<br><span class="small">출력 숫자는 개념 설명용 예시입니다(랜덤 초기값이라 실제 실행 시 값은 달라지되 수렴 방향은 동일).</span>
+</p>
+
+<div class="lesson-nav">
+  <span><a href="0002-hypothesis-and-cost.html">← 레슨 2</a></span>
+  <span><a href="../index.html">🏠 허브</a> · <a href="../reference/tensorflow-linreg.html">📄 코드 치트시트</a> · <a href="../reference/glossary.html">📖 용어집</a></span>
+  <span>다음: 레슨 4 — 경사하강법 (준비 중)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
