@@ -1,0 +1,145 @@
+<title>레슨 9 — 직렬화: 객체를 전선에 태우는 법</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0009 · CS 기초 → 네트워크 다리 · 직렬화</div>
+<h1>직렬화: 객체를 전선에 태우는 법</h1>
+<p class="lede">네트워크는 바이트 스트림만 나른다 — 객체도, 타입도, 의미도 없다. 오늘의 목표: <code>CMessageBuffer</code>의 <code>&lt;&lt;</code> 연산자가 하는 일을 미니 직렬화 버퍼로 직접 재현한다. 레슨 1(객체=바이트)이 드디어 수확기를 맞는다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+<a href="../NetLib/CMessageBuffer.h">CMessageBuffer</a>(423줄)는 이 서버의 모든 패킷이 태어나고 읽히는 곳이다. 손코딩 재작성 목록에서 링버퍼와 함께 가장 먼저 만들게 될 부품이며, 경계 검사(<code>CheckWrite</code>/<code>CheckRead</code>)는 조작 패킷을 막는 <strong>보안 방어선</strong>이기도 하다.
+</div>
+
+<h2>1. 지식 — 직렬화 버퍼의 3요소</h2>
+
+<h3>① 버퍼 + 두 개의 커서</h3>
+<p><a href="../NetLib/CMessageBuffer.h">CMessageBuffer.h:141-152</a>의 상태는 놀랍게 단순하다:</p>
+<pre><code>int m_iReadPos;              // 다음에 읽을 위치
+int m_iWritePos;             // 다음에 쓸 위치
+unsigned char* m_chBuffer;   // 그냥 바이트 배열</code></pre>
+<p>쓰면 WritePos가 전진, 읽으면 ReadPos가 전진. <code>ReadPos == WritePos</code>가 되면 다 읽은 것. 큐를 배열 위에 눕힌 모양새다.</p>
+
+<h3>② 넣기/빼기: memcpy + 커서 전진</h3>
+<p><code>buffer &lt;&lt; shX</code>가 내부에서 하는 일의 전부:</p>
+<pre><code>// 개념 코드 — CMessageBuffer::operator<<(short)의 뼈대
+if (CheckWrite(sizeof(short))) {                     // ← 먼저 경계 검사!
+    memcpy(m_chBuffer + m_iWritePos, &amp;shValue, sizeof(short));
+    m_iWritePos += sizeof(short);
+}
+return *this;                    // 자신을 반환 → buffer << a << b << c 체이닝</code></pre>
+<p>객체의 2바이트를 버퍼의 현재 위치에 <em>그대로 복사</em>한다. 레슨 1에서 배웠듯 short는 바이트 2개일 뿐이니까. <code>&gt;&gt;</code>는 정확히 반대다(버퍼→변수, ReadPos 전진). 반환 타입이 <code>CMessageBuffer&amp;</code>(레슨 4의 참조!)라서 <code>buf &lt;&lt; byType &lt;&lt; shX &lt;&lt; shY</code>처럼 이어 쓸 수 있다.</p>
+
+<h3>③ 경계 검사: 신뢰하지 않는 입력에 대한 방어선</h3>
+<p><a href="../NetLib/CMessageBuffer.h">CMessageBuffer.h:119-138</a> 실제 코드:</p>
+<pre><code>bool CheckRead(int iSize)
+{
+    if (m_iReadPos + iSize &gt; m_iWritePos)   // 데이터 끝을 넘는 읽기?
+    {
+        m_bError = true;                     // 에러 표시만 하고
+        return false;                        // 조용히 거부
+    }
+    return true;
+}</code></pre>
+<p>시나리오: 악의적 클라이언트가 "이동 패킷"이라며 <strong>2바이트만</strong> 보냈다. 핸들러는 <code>buf &gt;&gt; dir &gt;&gt; shX &gt;&gt; shY</code>로 5바이트를 읽으려 한다. CheckRead가 없다면? 버퍼 뒤의 남의 메모리를 읽는다(정보 유출/오염). 있다면? <code>m_bError</code>가 켜지고, 파싱 후 <code>IsError()</code> 확인 → <strong>즉시 연결 종료</strong>. "패킷은 유죄 추정"이 서버 보안의 제1원칙이다.</p>
+
+<h3>덤: 헤더 프레이밍과 pack(1)</h3>
+<p>페이로드 앞에는 <a href="../NetLib/CServer.h">CServer.h:3-17</a>의 4바이트 헤더가 붙는다 — 그리고 그 구조체는 <code>#pragma pack(push,1)</code>로 감싸져 있다. 이제 이유를 완전하게 말할 수 있다: 헤더는 <em>전선을 타는 바이트 배치 그 자체</em>이므로, 컴파일러 패딩(레슨 1)이 끼어들면 상대방과 약속한 4바이트가 깨진다. <strong>메모리용 구조체는 패딩 허용, 전송용 구조체는 pack(1)</strong> — 레슨 1 질문 세트의 복선 회수다.</p>
+
+<h2>2. 스킬 — 미니 직렬화 버퍼를 직접 만들기</h2>
+<p>이번엔 베끼지 말고 만든다. <code>scratch\serial_check.cpp</code>의 빈칸을 채워라:</p>
+<pre><code>#include &lt;cstdio&gt;
+#include &lt;cstring&gt;   // memcpy
+
+class MiniBuffer {
+    unsigned char buf[64];
+    int readPos = 0, writePos = 0;
+    bool error = false;
+public:
+    MiniBuffer&amp; operator&lt;&lt;(short v) {
+        // TODO(1): 경계 검사 후 memcpy + writePos 전진 (위의 개념 코드 참고)
+        return *this;
+    }
+    MiniBuffer&amp; operator&gt;&gt;(short&amp; v) {
+        // TODO(2): CheckRead에 해당하는 검사 후 memcpy + readPos 전진
+        return *this;
+    }
+    bool IsError() const { return error; }
+};
+
+int main() {
+    MiniBuffer b;
+    short x = 777, y = -25, outX = 0, outY = 0;
+
+    b &lt;&lt; x &lt;&lt; y;
+    b &gt;&gt; outX &gt;&gt; outY;
+    printf("복원: %d %d (기대: 777 -25), error=%d\n", outX, outY, b.IsError());
+
+    short extra;
+    b &gt;&gt; extra;                        // 있는 것보다 더 읽기 — 공격 시뮬레이션
+    printf("과잉 읽기 후 error=%d (기대: 1)\n", b.IsError());
+}</code></pre>
+<p>두 출력이 기대대로 나오면 통과. <strong>여러분은 방금 CMessageBuffer의 심장을 손코딩했다.</strong> 막히면 에이전트에게 — 답을 보여주기 전에 힌트부터 줄 것이다.</p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>memcpy가 정확히 뭐 하는 함수죠?</summary><div class="faq-a">
+<p><code>memcpy(목적지, 출발지, 바이트수)</code> — 타입도 의미도 묻지 않고 바이트를 그 수만큼 복사한다. 직렬화가 memcpy의 고향이다: "short의 의미"는 버리고 "short가 놓인 2바이트"만 나르는 것이 정확히 우리가 원하는 일이니까. 단, 겹치는 영역 복사는 UB(그때는 memmove), 그리고 목적지 공간 확보는 전적으로 호출자 책임 — 그래서 CheckWrite가 <em>먼저</em>다.</p>
+</div></details>
+
+<details class="faq"><summary>왜 구조체를 통째로 memcpy해서 보내지 않고 필드를 하나씩 << 하나요?</summary><div class="faq-a">
+<p>통째 복사는 ① 패딩까지 나가고(쓰레기 바이트 = 낭비 + 정보 유출), ② 구조체 레이아웃이 컴파일러/버전마다 달라질 수 있으며, ③ "이 패킷에 어떤 필드가 어떤 순서로 들어가는가"가 코드에 안 보인다. 필드 단위 <code>&lt;&lt;</code>는 패킷 명세가 코드 그 자체가 된다 — <code>MakePacket_MoveStart</code>를 읽으면 와이어 포맷이 그대로 보인다.</p>
+</div></details>
+
+<details class="faq"><summary>엔디언(endian)이라는 게 있다던데 여기선 왜 신경 안 쓰나요?</summary><div class="faq-a">
+<p>멀티바이트 값의 바이트 순서 문제다. x86/x64는 리틀 엔디언(낮은 바이트 먼저): short 777(0x0309)은 메모리에 <code>09 03</code>으로 눕는다. 인터넷 표준 프로토콜은 빅 엔디언을 쓰지만, 이 서버는 <strong>클라이언트와 서버가 모두 x86 계열</strong>이라는 전제로 리틀 엔디언 그대로 보낸다 — 게임업계의 흔한 실용적 선택이다. 다른 아키텍처와 통신해야 하는 순간 htons/ntohs 같은 변환이 필요해진다. 네트워크 아크에서 재론한다.</p>
+</div></details>
+
+<details class="faq"><summary>float도 그냥 memcpy로 보내도 되나요? 소수점인데요.</summary><div class="faq-a">
+<p>된다 — float도 그냥 4바이트다(IEEE 754라는 표준 배치). CMessageBuffer.h에 <code>operator&lt;&lt;(float)</code>가 태연히 있는 이유다. 양끝이 같은 표준을 쓰는 한(사실상 모든 현대 CPU) 바이트 복사로 완벽히 복원된다. 주의할 것은 오히려 <code>bool</code>이나 열거형처럼 크기가 처리계마다 다를 수 있는 타입 — 그래서 프로토콜에는 BYTE/short/int처럼 크기가 못 박힌 타입만 쓴다.</p>
+</div></details>
+
+<details class="faq"><summary>에러가 나면 예외를 던지지 왜 플래그(m_bError)만 세우나요?</summary><div class="faq-a">
+<p>설계 선택이다. 이 버퍼는 초당 수십만 번 불리는 핫패스에 있고, 예외는 (드물게 발생해도) 코드 경로를 복잡하게 하며 게임서버 업계는 전통적으로 예외를 꺼린다. 플래그 방식의 계약은 "연산은 조용히 무시되고, 파싱이 끝난 뒤 <code>IsError()</code> 한 번으로 판정한다" — 검사 지점이 한 곳으로 모여 오히려 빠뜨리기 어렵다. 대신 <em>반드시</em> 검사해야 한다는 규율이 필요하다.</p>
+</div></details>
+
+<details class="faq"><summary>AddRef/DecRef는 뭔가요? 왜 버퍼에 참조 카운트가 있죠?</summary><div class="faq-a">
+<p>브로드캐스트 때문이다. 이동 패킷 하나를 주변 30명에게 보낼 때 버퍼를 30벌 복사하는 대신, <strong>한 버퍼를 30개 세션의 SendQ가 공유</strong>하고 카운트를 30으로 올린다. 각 전송이 끝날 때마다 DecRef, 0이 되는 순간 풀로 반납. "여럿이 드는 객체는 마지막 사람이 문을 잠근다" — 레슨 3에서 예고한 공유 수명 문제의 해법이며, 멀티스레드 아크에서 이 카운트가 왜 <code>volatile LONG</code>+Interlocked여야 하는지 다룬다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://beej.us/guide/bgnet/html/split/slightly-advanced-techniques.html">Beej's Guide — 7.5절 Serialization</a> ("How do you pack data?" 문제의 고전적 해설).</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0008-bits-and-bytes.html">레슨 8</a> · <a href="0010-ring-buffer.html">레슨 10: 링버퍼</a> → <br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0009-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: 'buf << a << b << c 처럼 이어 쓸 수 있는 것은 operator<<의 어떤 설계 덕분인가?',
+  options: ['자기 자신의 참조를 반환하기 때문이다', '인자를 가변 개수로 받도록 만들었기에', '컴파일러가 세 호출을 하나로 합쳐줘서'],
+  answer: 0,
+  explain: 'CMessageBuffer& 를 반환하므로 (buf << a)의 결과가 다시 buf 자신이고, 거기에 << b가 이어진다. 레슨 4의 참조가 만든 문법적 편의다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'CheckRead가 ReadPos+size를 BufferSize가 아니라 WritePos와 비교하는 이유는?',
+  options: ['실제 데이터의 끝은 WritePos이기 때문이다', 'BufferSize는 실행 중에 계속 변하기 때문에', 'WritePos 비교가 CPU 연산상 더 저렴해서다'],
+  answer: 0,
+  explain: '버퍼 물리 크기(5000)까지는 공간이지만, 유효한 데이터는 WritePos까지다. 그 너머를 읽으면 쓰레기(이전 패킷 잔해)를 읽게 된다. 공간 검사(CheckWrite)와 데이터 검사(CheckRead)의 기준이 다른 이유.'
+});
+Quiz(document.getElementById('q3'), {
+  q: '전송용 헤더 구조체에만 #pragma pack(1)을 쓰는 이유는?',
+  options: ['와이어 바이트 배치가 약속과 같아야 해서', 'pack을 쓰면 전송 속도가 더 빨라지기 때문', '헤더는 4바이트보다 작아야 하기 때문이다'],
+  answer: 0,
+  explain: '전송 구조체는 메모리 레이아웃이 곧 프로토콜 명세다. 패딩이 끼면 상대방이 파싱하는 오프셋과 어긋난다. 속도와는 무관하며(오히려 접근은 느려질 수 있다), 메모리용 구조체엔 패딩을 그대로 둔다.'
+});
+</script>

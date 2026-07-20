@@ -1,0 +1,95 @@
+<title>레슨 3-1 — "OS 할당자를 거치는 비싼 연산"의 정체</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0003-1 · 파생 심화 · <a href="0003-stack-heap-lifetime.html">레슨 3</a>에서 파생 (질문: "OS 할당자를 거치는 비싼 연산을 생략 없이 설명해달라")</div>
+<h1>"비싼 연산"의 정체 — new 한 번에 실제로 벌어지는 일</h1>
+<p class="lede">레슨 3은 <code>new</code>를 "OS 할당자를 거치는 비싼 연산"이라고 한 단어로 뭉갰다. 그 안에는 최소 다섯 단계, 최악의 경우 커널 왕복 두 번이 들어있다. 하나도 빼지 않고 펼친다.</p>
+
+<h2>비유부터 — 공책 vs 창고 사물함</h2>
+<table>
+<tr><th>스택 = 공책에 이어 쓰기</th><th>힙 = 창고에서 사물함 빌리기</th></tr>
+<tr><td>연필이 지금 몇 줄에 있는지만 알면 된다. 3줄 필요하면 <strong>연필을 3줄 내린다. 끝.</strong> 다 쓰면 3줄 올린다. 끝.</td><td><strong>관리인(할당자)</strong>이 있다. ①줄 서기 ②장부 뒤지기 ③큰 것 쪼개기 ④꼬리표 붙이기 ⑤줄에서 나가기. 창고가 꽉 차면 <strong>건물주(커널)</strong>에게 신청서를 낸다.</td></tr>
+</table>
+
+<h2>진짜 이름으로 — new의 호출 사슬</h2>
+<pre><code>new stSESSION
+  → operator new(크기)     // 컴파일러가 부르는 함수
+  → malloc(크기)            // C 런타임의 할당자
+  → HeapAlloc(...)          // Windows 힙 = "관리인"</code></pre>
+
+<h3>관리인 안에서 (빠른 경로)</h3>
+<ol>
+<li><strong>락을 잡는다.</strong> 여러 스레드가 동시에 <code>new</code>할 수 있으니 장부가 꼬이지 않게 한 번에 하나만. → <strong>워커 4개가 동시에 부르면 3개는 기다린다.</strong></li>
+<li><strong>프리 리스트를 뒤진다.</strong> "빈 덩어리" 연결 목록을 따라가며 충분히 큰 것을 찾는다. 메모리 여기저기를 점프하며 읽으므로 <strong>캐시 미스</strong>가 잦다(레슨 7 주제).</li>
+<li><strong>쪼갠다(split).</strong> 100칸에서 48칸을 떼주고 남은 52칸을 다시 목록에 넣는다.</li>
+<li><strong>헤더를 쓴다.</strong> 돌려주는 주소 <em>바로 앞</em>에 크기·플래그를 기록한다. ← <strong>레슨 3 퀴즈 2(<code>delete</code> vs <code>delete[]</code>)가 UB인 이유가 정확히 이것</strong>: 헤더 위치가 어긋나면 관리인 장부가 깨진다.</li>
+<li><strong>락을 푼다.</strong></li>
+</ol>
+
+<h3>창고가 꽉 찼을 때 (느린 경로)</h3>
+<p><strong>6. <code>VirtualAlloc</code></strong> 으로 커널에게 메모리를 더 요청 — <strong>시스템 콜</strong>. 여기가 진짜 비싼 지점이다.</p>
+
+<div class="box">
+<div class="box-title">시스템 콜이 왜 비싼가</div>
+CPU는 <strong>유저 모드</strong>(내 프로그램)와 <strong>커널 모드</strong>(운영체제) 두 권한 수준으로 돈다. 시스템 콜은 그 문을 넘는 일이다: 하던 것 전부 저장 → 권한 수준 변경 → 커널로 점프 → 요청 정당성 검사 → <strong>페이지 테이블</strong>(주소 장부) 수정 → 권한 복구 → 저장한 것 복원 → 복귀.<br>
+<em>내 방 문을 여는 것</em> vs <em>공항 보안검색대를 통과하는 것</em>의 차이.
+</div>
+
+<p><strong>7. 그런데 아직 끝이 아니다.</strong> 커널은 "방 배정했다"고 <em>종이에만</em> 써준 상태(주소 공간 예약/커밋). 실제 물리 메모리는 없다. 그 자리에 <strong>처음 쓰는 순간</strong> → <strong>페이지 폴트</strong> → <strong>또 커널 진입</strong> → 빈 물리 페이지 확보 → <strong>0으로 전부 지움</strong>(앞 프로세스 데이터 유출 방지 — 보안) → 페이지 테이블에 연결 → 복귀.</p>
+
+<div class="box insight">
+<div class="box-title">한 문장</div>
+<code>new</code> 한 번은 최악의 경우 <strong>락 경쟁 + 장부 검색 + 커널 왕복 두 번</strong>이다.
+</div>
+
+<h2>그동안 스택은</h2>
+<pre><code>sub rsp, 48        ; 이게 전부다</code></pre>
+<p>기계어 명령 <strong>딱 하나</strong> — 스택 포인터에서 48을 뺀다. 크기는 컴파일 타임에 이미 계산돼 있다. 락도, 장부도, 헤더도, 시스템 콜도 <strong>없다</strong>. 해제는 함수 끝에서 <code>rsp</code>를 되돌리는 게 전부 — 공짜. 게다가 스택 꼭대기는 프로그램에서 가장 자주 건드리는 메모리라 거의 항상 캐시에 뜨겁다.</p>
+
+<h2>비용 자릿수 (환경마다 다름 — 자릿수만 볼 것)</h2>
+<table>
+<tr><th>하는 일</th><th>대략</th></tr>
+<tr><td>스택 할당 (<code>sub rsp</code>)</td><td>1 사이클 미만 — 사실상 0</td></tr>
+<tr><td>힙 할당, 빠른 경로</td><td>수십 나노초</td></tr>
+<tr><td>힙 할당, 락 경쟁</td><td>수백 ns ~ 수 μs</td></tr>
+<tr><td>힙 할당, <code>VirtualAlloc</code>까지</td><td>수 μs</td></tr>
+<tr><td>첫 접근 시 페이지 폴트</td><td>수 μs</td></tr>
+</table>
+<p><strong>스택 대비 100배~10000배.</strong> 이것이 "비싼 연산"의 실체다.</p>
+
+<h2>그래서 이 서버의 설계</h2>
+<p>초당 수만 패킷. 패킷마다 <code>new</code>면 위 다섯 단계를 초당 수만 번 반복하고, <strong>워커 스레드들이 ①번 락에서 서로를 막는다</strong> — 코어를 8개 줘도 할당 구간에선 한 줄로 서니 병렬성이 죽는다.</p>
+<p>그래서 <code>CMessageBuffer</code>는 <code>new</code>가 아니라 풀에서 <code>Alloc()</code>으로 빌려온다(CServer.cpp:375). 풀은 시작 시 큰 덩어리를 한 번 받아두고 <strong>빌려주기/돌려받기만</strong> 한다 — 장부 검색도, 쪼개기도, 시스템 콜도 없이.</p>
+<p class="note">이것이 <a href="../learning-records/0004-preallocation-rationale-user-correction.md">세션 사전할당의 이유</a> 중 <strong>"비싸다" 쪽 절반</strong>이다. 나머지 절반(use-after-free 회피)은 정확성 문제로, 레슨 3 FAQ와 이후 IOCP 레슨에서 다룬다.</p>
+
+<h2>확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+
+<h2>주 자료 (필독)</h2>
+<ul>
+<li><a href="https://pages.cs.wisc.edu/~remzi/OSTEP/vm-freespace.pdf">OSTEP — Free-Space Management</a> (무료 PDF) — 프리 리스트·쪼개기·병합을 그림으로. 할당자를 이해하는 표준 자료.</li>
+<li><a href="https://learn.microsoft.com/en-us/windows/win32/memory/comparing-memory-allocation-methods">Microsoft Learn — Comparing Memory Allocation Methods</a> — HeapAlloc과 VirtualAlloc의 층위 구분.</li>
+<li><a href="https://pages.cs.wisc.edu/~remzi/OSTEP/vm-mechanism.pdf">OSTEP — Address Translation</a> — 페이지 테이블·페이지 폴트의 정확한 메커니즘(레슨 6과 연결).</li>
+</ul>
+
+<div class="lesson-footer">
+부모 레슨: <a href="0003-stack-heap-lifetime.html">레슨 3 — 스택, 힙, 객체의 수명</a> · <a href="index.html">코스 홈</a><br>
+다음에 이걸 다시 만난다: 레슨 6(가상 메모리 — 페이지 폴트의 정체), 레슨 7(캐시 미스), 그리고 메모리 풀 해부.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: 'new 호출이 "가장 비싸지는" 경우로 가장 정확한 것은?',
+  options: ['프리 리스트에 맞는 빈 덩어리가 바로 있을 때', '커널에 메모리를 더 요청하고 첫 접근까지 갈 때', '해제 없이 같은 크기를 반복해서 요청할 때'],
+  answer: 1,
+  explain: '빠른 경로(락+검색)는 수십 나노초지만, 창고가 꽉 차면 VirtualAlloc 시스템 콜로 커널을 다녀오고, 그 자리를 처음 건드릴 때 페이지 폴트로 커널을 한 번 더 다녀온다. 커널 왕복 두 번이 최악이다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: '멀티스레드 서버에서 잦은 new가 병렬성을 죽이는 직접 원인은?',
+  options: ['할당자가 장부를 지키려고 락을 잡기 때문에', '스레드마다 힙이 따로 만들어져 낭비되기 때문에', '커널이 스레드 수만큼 페이지를 미리 잡아서'],
+  answer: 0,
+  explain: '할당자는 프리 리스트(장부)가 꼬이지 않게 락을 잡는다. 워커가 8개여도 할당 구간에선 한 줄로 서게 되어, 코어를 늘려도 그 구간은 빨라지지 않는다. 메모리 풀이 이 줄서기를 없앤다.'
+});
+</script>

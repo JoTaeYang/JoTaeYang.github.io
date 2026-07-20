@@ -1,0 +1,85 @@
+<title>레슨 1-1 — 패딩의 두 규칙, 그리고 포인터의 크기</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0001-1 · 파생 심화 · <a href="0001-object-in-memory.html">레슨 1</a>에서 파생</div>
+<h1>패딩의 두 규칙, 그리고 포인터의 크기</h1>
+<p class="lede">레슨 1 퀴즈에서 드러난 두 혼동을 정면으로 교정한다. 짧지만, 이 둘이 잡혀야 레슨 2(포인터)가 제대로 선다.</p>
+
+<h2>혼동 ① — 패딩에는 규칙이 두 개다 (섞으면 틀린다)</h2>
+
+<h3>규칙 A: 중간 패딩 — 범인은 "바로 다음 멤버"</h3>
+<p>멤버 <em>사이</em>의 패딩은 오직 하나의 질문으로 결정된다: <strong>"바로 다음 멤버가 요구하는 정렬은 몇인가?"</strong> 구조체 전체 크기(8의 배수)와는 아무 상관이 없다.</p>
+<pre><code>short shY;                  // 오프셋 16–17. 다음 위치는 18.
+st_SECTOR_POS CurSectorPos; // 첫 멤버가 int → 4정렬 요구.
+                            // 18은 4의 배수가 아님 → 20까지 2바이트 패딩.</code></pre>
+<p>만약 shY 다음이 <code>char</code>였다면? 패딩 0 — char는 1정렬이라 18에 바로 앉는다. 다음이 <code>__int64</code>였다면? 24까지 6바이트 패딩. <strong>패딩의 양은 전적으로 다음 손님이 정한다.</strong></p>
+
+<h3>규칙 B: 꼬리 패딩 — 범인은 "배열의 다음 원소"</h3>
+<p>구조체 <em>끝</em>의 패딩만이 "전체 크기 = 최대 멤버 정렬의 배수" 규칙을 따른다. 이유는 배열이다: <code>arr[1]</code>이 <code>arr[0]</code> 바로 뒤에 붙을 때 <code>arr[1]</code>의 8정렬 멤버(SessionKey)가 어긋나면 안 되므로, 41을 48로 올린다.</p>
+
+<table>
+<tr><th></th><th>중간 패딩 (규칙 A)</th><th>꼬리 패딩 (규칙 B)</th></tr>
+<tr><td>위치</td><td>멤버와 멤버 사이</td><td>마지막 멤버 뒤</td></tr>
+<tr><td>기준</td><td><strong>바로 다음 멤버</strong>의 정렬</td><td><strong>최대 멤버</strong> 정렬의 배수로 올림</td></tr>
+<tr><td>누굴 위해</td><td>다음 멤버 하나</td><td>배열의 다음 원소 전체</td></tr>
+</table>
+
+<h3>드릴 — 손으로 세 개만 (답은 아래 접기)</h3>
+<pre><code>struct P1 { char a; int b; };                 // sizeof?
+struct P2 { int b; char a; };                 // sizeof?  (P1과 멤버 같음, 순서만 반대)
+struct P3 { char a; __int64 b; short c; };    // sizeof?</code></pre>
+<details class="faq"><summary>답 확인 (계산을 먼저 끝내고 열 것)</summary><div class="faq-a">
+<p><strong>P1 = 8</strong>: a(0), 패딩 3(규칙 A: int가 4정렬), b(4–7). 끝이 8 — 4의 배수라 꼬리 패딩 0.<br>
+<strong>P2 = 8</strong>: b(0–3), a(4). 5를 4의 배수로 올림(규칙 B) → 8. <em>같은 멤버인데 패딩의 위치가 다르다!</em><br>
+<strong>P3 = 24</strong>: a(0), 패딩 7(규칙 A: __int64), b(8–15), c(16–17), 꼬리 패딩 6(규칙 B: 18→24). 순서를 b,c,a로 바꾸면 16이 된다 — 레슨 1 떡밥의 원리다.</p>
+</div></details>
+
+<h2>혼동 ② — 포인터의 크기는 대상과 무관하다</h2>
+
+<h3>명함과 집</h3>
+<p>포인터가 담는 것은 객체가 아니라 <strong>주소 하나</strong>다. 집(CCharacter, 48바이트)이 아무리 커도 명함에 적힌 주소(x64에서 8바이트) 크기는 같다. 초가집(char, 1바이트)의 주소도 같은 8바이트다.</p>
+<pre><code>sizeof(char)        == 1        sizeof(char*)        == 8
+sizeof(CCharacter)  == 48       sizeof(CCharacter*)  == 8
+sizeof(double[100]) == 800      sizeof(double(*)[100]) == 8   // 배열 포인터마저도!</code></pre>
+<p>왜 8인가? x64 CPU의 주소가 64비트(8바이트)이기 때문 — <em>가리키는 대상이 무엇이든</em> 위치를 표현하는 데 드는 비용은 같다. 그럼 타입(<code>CCharacter*</code> vs <code>char*</code>)은 왜 붙이나? 크기 때문이 아니라 <strong>해석 때문</strong>이다: 역참조할 때 몇 바이트를 어떤 구조로 읽을지, 그리고 +1 할 때 몇 바이트 건너뛸지(48 vs 1)를 컴파일러가 알아야 하니까.</p>
+
+<div class="box insight">
+<div class="box-title">한 문장 정리</div>
+포인터의 <strong>크기</strong>는 플랫폼이 정하고(x64 = 8), 포인터의 <strong>타입</strong>은 해석과 보폭을 정한다. 이 문장이 외워지면 레슨 2의 <code>players + index</code> 연산이 자명해진다.
+</div>
+
+<h3>30초 검증 (직접 실행)</h3>
+<pre><code>#include &lt;cstdio&gt;
+#include &lt;windows.h&gt;
+#include "../FighterServer/CCharacter.h"
+
+int main() {
+    printf("%zu %zu %zu %zu\n",
+        sizeof(char*), sizeof(int*), sizeof(CCharacter*), sizeof(void*));
+    // 전부 8이 나온다. 하나라도 다르면 스크린샷 들고 에이전트에게 올 것.
+}</code></pre>
+
+<h2>재도전 퀴즈 (변형판)</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+
+<div class="lesson-footer">
+부모 레슨: <a href="0001-object-in-memory.html">레슨 1 — 객체를 바이트로 보기</a> · <a href="index.html">코스 홈</a><br>
+며칠 뒤 레슨 1의 원래 퀴즈를 다시 풀어 보라(간격 반복). 그때도 맞으면 진짜 저장된 것이다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: 'struct { short a; int b; } 에서 a 뒤 패딩은 몇 바이트이고, 그 근거 규칙은?',
+  options: ['2바이트 — 다음 멤버 int의 4정렬 (규칙 A)', '2바이트 — 전체 크기 8의 배수 규칙 (규칙 B)', '6바이트 — 최대 정렬 8을 맞추는 규칙 적용'],
+  answer: 0,
+  explain: '중간 패딩은 오직 "다음 멤버"가 정한다. a가 0–1을 쓰고 int는 4정렬이므로 2–3이 패딩. (전체 크기는 8 — 그건 꼬리에서 규칙 B가 처리한 결과다. 이 구조체의 최대 정렬은 4다.)'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'CSector가 sectors[y][x]마다 vector<CCharacter*>를 두는데, 원소 하나의 크기는?',
+  options: ['48바이트다 — 캐릭터 하나의 크기 그대로', '8바이트다 — 대상과 무관한 주소의 크기', '56바이트다 — 캐릭터 48에 주소 8을 더함'],
+  answer: 1,
+  explain: '벡터가 담는 것은 CCharacter*, 즉 명함(주소)뿐이다. 캐릭터 실물 48바이트는 players 배열에 한 벌만 있다. 그래서 섹터 이동이 8바이트 복사로 끝난다 — 레슨 2와 7에서 이 설계의 이득을 본다.'
+});
+</script>

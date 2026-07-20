@@ -1,0 +1,141 @@
+<title>레슨 10 — 링버퍼: 끝없는 수신 스트림을 담는 그릇</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0010 · CS 기초 · 자료구조</div>
+<h1>링버퍼: 끝없는 수신 스트림을 담는 그릇</h1>
+<p class="lede">TCP는 데이터를 <em>패킷 단위로</em> 주지 않는다 — 끊기고 이어붙은 바이트 조각의 강물이다. 오늘의 목표: 그 강물을 고정 크기 배열 하나로 받아내는 원형 큐의 원리를 이해하고, 미니 링버퍼를 손코딩한다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+<a href="../NetLib/CRingBuffer.h">CRingBuffer</a>(8192바이트)는 모든 세션의 수신 데이터가 지나가는 관문이다. 배치 1~2에서 배운 전부가 여기 합류한다: 바이트 배열(레슨 1), 포인터 커서(레슨 2), 고정 힙 버퍼(레슨 3), 2의 거듭제곱 크기(레슨 8), 그리고 직렬화 버퍼와의 커서 구조 유사성(레슨 9). 재작성 1호 부품이다.
+</div>
+
+<h2>1. 지식 — 원형 큐의 네 가지 문제</h2>
+
+<h3>문제 ①: 왜 그냥 배열 큐로는 안 되나</h3>
+<p>레슨 9의 MiniBuffer는 커서가 앞으로만 간다 — 패킷 하나 만들고 버리는 용도라 괜찮았다. 하지만 수신 버퍼는 <strong>연결이 살아있는 내내</strong> 쓰고 읽기를 반복한다. 커서가 전진만 하면 8192바이트는 금방 끝난다. 남은 데이터를 매번 배열 앞으로 <code>memcpy</code>로 밀면? 수신할 때마다 복사 비용 — 초당 수만 패킷이면 재앙이다.</p>
+
+<h3>문제 ②: 해법 — 끝과 처음을 이어 붙인다</h3>
+<p><a href="../NetLib/CRingBuffer.h">CRingBuffer.h:44-47</a>의 상태는 딱 세 개다:</p>
+<pre><code>char* _buffer;     // 8192바이트 (최대 패킷 4096+헤더가 조각나도 두 개는 담게)
+int _iFrontPos;    // 읽는 커서 (Dequeue가 전진)
+int _iRearPos;     // 쓰는 커서 (Enqueue가 전진)</code></pre>
+<p>커서가 배열 끝에 닿으면 <strong>0으로 되감는다</strong>: <code>pos = (pos + size) % 8192</code>. 배열은 유한하지만 커서에게는 끝이 없는 원이 된다. 읽힌 자리는 자동으로 "빈 공간"이 되어 재사용된다 — 복사 없이.</p>
+<pre><code>       rear(쓰기)                          rear가 끝을 지나 되감긴 상태
+        ▼                                        ▼
+  [ ...데이터... ]                        [ 데이터 |        | 데이터 ]
+  ▲                                              ▲
+ front(읽기)                                    front
+  (한 덩어리)                             (두 덩어리로 쪼개짐!)</code></pre>
+
+<h3>문제 ③: "가득 참"과 "텅 빔"을 어떻게 구별하나</h3>
+<p>고전 함정이다. <code>front == rear</code>는 텅 빈 상태다. 그런데 8192바이트를 꽉 채워도 rear가 한 바퀴 돌아 <code>front == rear</code>가 된다 — 두 상태가 같아 보인다! 이 구현의 해법은 <strong>한 칸을 비워 두는 것</strong>: 실제 용량을 8191로 쓰고, <code>rear 바로 뒤가 front</code>면 가득으로 판정한다. (대안: 사용량 카운터를 따로 두기 — 그러면 멀티스레드에서 카운터 동기화 문제가 생긴다. 한 칸 희생이 더 우아하다.)</p>
+
+<h3>문제 ④: 되감기 경계에 걸친 쓰기 — Direct 계열 함수의 존재 이유</h3>
+<p>위 그림처럼 데이터가 두 덩어리로 쪼개질 수 있다. WSARecv에게 "여기부터 여기까지 써라"라고 <em>연속된</em> 공간을 줘야 하는데, 빈 공간이 끝+처음으로 나뉘어 있다면? <a href="../NetLib/CRingBuffer.h">CRingBuffer.h:21-22</a>의 답:</p>
+<pre><code>int DirectEnqueueSize(void);   // 되감기 전까지 "한 번에" 쓸 수 있는 연속 크기
+int DirectDequeueSize(void);   // 되감기 전까지 "한 번에" 읽을 수 있는 연속 크기</code></pre>
+<p>서버는 이 두 값으로 <strong>WSABUF 두 개</strong>(뒷조각 + 앞조각)를 만들어 WSARecv에 넘긴다 — 커널이 두 조각에 직접 나눠 쓰므로 복사가 0번이다. 코드베이스 지도의 "2세그먼트 스캐터 수신"의 정체가 이것이다. IOCP 아크에서 실물을 보게 된다.</p>
+
+<h2>2. 스킬 — 미니 링버퍼 손코딩</h2>
+<p>용량 8바이트짜리 링버퍼를 만든다. <code>scratch\ring_check.cpp</code>:</p>
+<pre><code>#include &lt;cstdio&gt;
+#include &lt;cstring&gt;
+
+class MiniRing {
+    char buf[8];
+    int front = 0, rear = 0;          // 한 칸 비움 → 실용량 7바이트
+public:
+    int UseSize()  { return (rear - front + 8) % 8; }
+    int FreeSize() { return 7 - UseSize(); }
+
+    bool Enqueue(const char* src, int size) {
+        if (size &gt; FreeSize()) return false;
+        for (int i = 0; i &lt; size; i++)            // TODO: 이 루프를
+            buf[(rear + i) % 8] = src[i];         // memcpy 1~2번으로 바꿔보라
+        rear = (rear + size) % 8;
+        return true;
+    }
+    bool Dequeue(char* dst, int size) {
+        if (size &gt; UseSize()) return false;
+        for (int i = 0; i &lt; size; i++)
+            dst[i] = buf[(front + i) % 8];
+        front = (front + size) % 8;
+        return true;
+    }
+};
+
+int main() {
+    MiniRing r; char out[8] = {};
+    printf("A: %d\n", r.Enqueue("abcde", 5));   // 5바이트 in
+    r.Dequeue(out, 3); printf("B: %.3s\n", out); // abc out → 앞쪽 3칸 재사용 가능
+    printf("C: %d\n", r.Enqueue("XYZ", 3));     // 3바이트 — 되감기 발생!
+    printf("D: free=%d use=%d\n", r.FreeSize(), r.UseSize());
+    r.Dequeue(out, 5); printf("E: %.5s\n", out); // deXYZ — 순서 보존 확인
+}</code></pre>
+<p>실행 전에 A~E 출력을 전부 예측하고, 각 시점의 front/rear 값을 종이에 그려라. 그 그림이 그려지면 링버퍼는 끝난 것이다. 도전 과제: 주석대로 바이트 루프를 "경계 전 조각 + 경계 후 조각" memcpy 두 번으로 바꿔 보라 — 그게 바로 진짜 CRingBuffer::Enqueue의 구조다.</p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>% (나머지 연산)가 어떻게 "되감기"가 되는 거죠?</summary><div class="faq-a">
+<p><code>x % 8</code>은 x를 0~7 범위로 접어 넣는다: 7 다음인 8은 0으로, 9는 1로. 커서가 끝을 넘는 순간 자동으로 처음으로 돌아가는 효과다. 그리고 레슨 8의 복선 회수: 8이 2의 거듭제곱이므로 컴파일러는 이걸 <code>x &amp; 7</code>(한 사이클)로 바꾼다. CRingBuffer가 8192인 이유의 절반이 이것이다.</p>
+</div></details>
+
+<details class="faq"><summary>왜 8192바이트인가요? 더 크면 안전하지 않나요?</summary><div class="faq-a">
+<p>주석이 답을 준다: "최대 페이로드(4096)+헤더 패킷이 조각나도 담을 수 있는 크기". 최악의 경우 = 거의 완성된 패킷 하나(4100) + 다음 패킷 조각이 공존하는 상황이고 8192면 두 개가 들어간다. 더 키우면? 세션 9500개 × 8KB = 74MB가 이미 상주하는데, 16KB면 148MB다(레슨 6의 커밋 메모리). 게다가 어차피 GameThread가 5ms마다 비워주므로 쌓일 새가 없다. "충분한 최소"가 설계의 미덕이다.</p>
+</div></details>
+
+<details class="faq"><summary>버퍼가 그래도 가득 차면 어떻게 되나요?</summary><div class="faq-a">
+<p>Enqueue가 실패를 반환하고, 서버는 이를 "클라이언트가 비정상적으로 데이터를 퍼붓거나, 처리 루프가 밀렸다"는 신호로 보고 연결을 끊는 것이 정석이다. 무한정 버퍼를 늘려주는 것은 공격자에게 서버 메모리를 헌납하는 것과 같다(이른바 슬로우로리스형 자원 고갈). 고정 크기 자체가 방어 장치다.</p>
+</div></details>
+
+<details class="faq"><summary>front와 rear를 서로 다른 스레드가 만져도 되나요?</summary><div class="faq-a">
+<p>핵심을 찌르는 질문이다. 이 링버퍼는 <strong>SPSC</strong>(단일 생산자-단일 소비자) 전제다: 쓰는 쪽은 rear만 옮기고(IOCP 완료 경로), 읽는 쪽은 front만 옮긴다. 서로 다른 변수를 만지므로 락 없이도 (일정 조건에서) 안전하다 — 하지만 "일정 조건"에 메모리 가시성이라는 깊은 함정이 있어서, 멀티스레드 아크에서 이 버퍼를 다시 해부한다. 지금은 "한 쪽 커서는 한 스레드만"이라는 규율만 기억하라.</p>
+</div></details>
+
+<details class="faq"><summary>레슨 9의 CMessageBuffer도 커서 두 개던데, 그건 왜 링이 아니죠?</summary><div class="faq-a">
+<p>수명이 다르다. CMessageBuffer는 <em>패킷 하나</em>의 그릇이다 — 만들고, 보내고, 풀에 반납(Clear로 커서 리셋). 되감을 일이 없다. CRingBuffer는 <em>연결 전체</em>의 수신 스트림을 계속 받아야 하므로 순환이 필수다. "일회용 접시 vs 회전초밥 레일"로 기억하라. 같은 커서 패턴이 수명 요구에 따라 다른 자료구조가 되는 좋은 사례다.</p>
+</div></details>
+
+<details class="faq"><summary>TCP가 패킷 단위로 안 준다는 게 무슨 뜻인가요? 보낼 땐 패킷으로 보냈는데요.</summary><div class="faq-a">
+<p>TCP는 <strong>바이트 스트림</strong> 프로토콜이다 — "보낸 순서대로 빠짐없이"만 보장하고, 경계는 보존하지 않는다. 10바이트 패킷 3개를 보내도 받는 쪽에는 7바이트, 그다음 23바이트로 도착할 수 있다(합쳐지고 쪼개진다). 그래서 헤더에 길이(wSize)를 넣고, 링버퍼에 모인 바이트에서 "완성된 패킷"을 오려내는 <code>RecvMsgDiv</code> 같은 재조립 코드가 반드시 필요하다. 네트워크 아크(다음 배치)의 첫 주제가 바로 이것이다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://en.wikipedia.org/wiki/Circular_buffer">Wikipedia — Circular buffer</a>(full/empty 판별 전략 비교가 좋다). 이어서 <a href="https://beej.us/guide/bgnet/html/split/slightly-advanced-techniques.html">Beej's Guide 7.4절 (Handling Partial send()s)</a>로 "TCP는 경계가 없다" 감각을 예습하라.</li>
+<li>배치 2 완료 후: <a href="../NetLib/CRingBuffer.cpp">CRingBuffer.cpp</a> 원본 323줄을 처음부터 읽어 보라. 이제 다 읽힐 것이다.</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0009-serialization.html">레슨 9</a> · <a href="0011-tcp-ip-big-picture.html">레슨 11: TCP/IP 큰 그림</a> → · <a href="../reference/codebase-map.html">코드베이스 지도</a><br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0010-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: '용량 8인 링버퍼의 실제 최대 저장량이 7바이트인 이유는?',
+  options: ['가득참과 텅빔의 front==rear 충돌을 피하려고', '한 칸은 헤더 저장용으로 예약되어 있어서다', '나머지 연산이 마지막 칸을 계산하지 못해서'],
+  answer: 0,
+  explain: '8바이트를 다 쓰면 rear가 한 바퀴 돌아 front와 같아져 "텅 빔"과 구별 불가. 한 칸을 희생해 "rear+1==front면 가득"이라는 판별식을 얻는다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'DirectEnqueueSize가 필요한 근본 이유는?',
+  options: ['빈 공간이 배열 끝과 처음으로 쪼개질 수 있어서', '한 번에 넣을 수 있는 패킷 개수 제한 때문에', 'Enqueue보다 Direct 방식이 항상 더 빨라서다'],
+  answer: 0,
+  explain: '되감기 때문에 빈 공간이 두 조각날 수 있는데, WSARecv 같은 API에는 연속 공간을 줘야 한다. "경계 전까지의 연속 크기"를 알려주는 것이 Direct 계열의 역할이고, 조각 두 개를 WSABUF 2개로 넘기는 것이 스캐터 수신이다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: '수신 버퍼를 링버퍼로 만들어 얻는 결정적 이득은?',
+  options: ['읽힌 공간이 복사 없이 자동 재사용된다는 것', '데이터가 도착 순서와 무관하게 정렬된다는 점', '버퍼 크기를 실행 중에 늘릴 수 있게 된다는 것'],
+  answer: 0,
+  explain: '선형 버퍼는 남은 데이터를 주기적으로 앞으로 밀어야(memcpy) 공간이 나지만, 링은 커서가 돌기만 하면 된다. 순서는 TCP+큐 성질로 이미 보장되고, 크기는 오히려 고정이다.'
+});
+</script>

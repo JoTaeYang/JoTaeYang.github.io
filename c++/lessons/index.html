@@ -1,0 +1,77 @@
+<title>코스 홈 — IOCP 서버 손코딩 마스터리</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Course Home</div>
+<h1>IOCP 서버 손코딩 마스터리</h1>
+<p class="lede">미션: NetLib + FighterServer를 아무것도 안 보고 다시 쓸 수 있는 실무 역량. 레슨은 5개 배치로 열리고, <strong>순서대로 하나씩</strong> — 각 레슨의 검증 실습을 통과한 뒤 다음으로.</p>
+
+<h2>배치 1 — C++ 기본기 (메모리에서 아키텍처까지)</h2>
+<table>
+<tr><th>#</th><th>레슨</th><th>핵심 질문</th><th>앵커 코드</th></tr>
+<tr><td>1</td><td><a href="0001-object-in-memory.html">객체를 바이트로 보기</a></td><td>sizeof(CCharacter)는 왜 39가 아니라 48인가?</td><td>CCharacter.h</td></tr>
+<tr><td>2</td><td><a href="0002-pointers.html">포인터: 주소를 값으로 다루기</a></td><td>players[index]는 어떤 주소 계산인가?</td><td>CFighterServer.cpp</td></tr>
+<tr><td>3</td><td><a href="0003-stack-heap-lifetime.html">스택, 힙, 객체의 수명</a></td><td>players는 왜 힙에, around는 왜 스택에 사는가?</td><td>생성자/소멸자/Start</td></tr>
+<tr><td>4</td><td><a href="0004-references-and-passing.html">값, 포인터, 참조</a></td><td>함수 시그니처에서 설계 의도를 어떻게 읽는가?</td><td>SendPacket, GetSectorArounds</td></tr>
+<tr><td>5</td><td><a href="0005-inheritance-virtual.html">상속과 virtual</a></td><td>엔진은 어떻게 게임 코드를 모른 채 호출하는가?</td><td>CServer.h ↔ CFighterServer.h</td></tr>
+</table>
+
+<h2>배치 2 — CS 기초 (OS · 하드웨어 · 자료구조)</h2>
+<table>
+<tr><th>#</th><th>레슨</th><th>핵심 질문</th><th>앵커 코드</th></tr>
+<tr><td>6</td><td><a href="0006-virtual-memory.html">가상 메모리: 주소는 거짓말이다</a></td><td>nullptr 크래시는 왜 크래시인가? 스택은 몇 개인가?</td><td>CCrashDump, 주소 공간</td></tr>
+<tr><td>7</td><td><a href="0007-cpu-cache.html">CPU 캐시와 지역성</a></td><td>섹터는 왜 list를 버리고 vector+swap-remove를 택했나?</td><td>CSector.cpp</td></tr>
+<tr><td>8</td><td><a href="0008-bits-and-bytes.html">비트와 바이트: 세션 Key 해부</a></td><td>Key 하나에 인덱스와 고유번호가 어떻게 포개지나?</td><td>CServer.h GET_SESSIONINDEX</td></tr>
+<tr><td>9</td><td><a href="0009-serialization.html">직렬화: 객체를 전선에 태우는 법</a></td><td>&lt;&lt; 연산자와 경계 검사는 무엇을 지키는가?</td><td>CMessageBuffer.h</td></tr>
+<tr><td>10</td><td><a href="0010-ring-buffer.html">링버퍼: 수신 스트림의 그릇</a></td><td>가득참/텅빔을 어떻게 구별하고, 왜 Direct 크기가 필요한가?</td><td>CRingBuffer.h</td></tr>
+</table>
+
+<h2>배치 3 — 네트워크 아크 (TCP/IP · 소켓 · 프레이밍)</h2>
+<table>
+<tr><th>#</th><th>레슨</th><th>핵심 질문</th><th>앵커 코드</th></tr>
+<tr><td>11</td><td><a href="0011-tcp-ip-big-picture.html">TCP/IP 큰 그림</a></td><td>TCP가 보장하는 것과 안 하는 것은 정확히 무엇인가?</td><td>main.cpp Start, htons</td></tr>
+<tr><td>12</td><td><a href="0012-socket-api.html">소켓 API: 에코 서버 손코딩</a></td><td>socket→bind→listen→accept 사다리로 첫 서버 만들기</td><td>CServer::Start, AcceptThread</td></tr>
+<tr><td>13</td><td><a href="0013-framing.html">프레이밍과 재조립</a></td><td>바이트 강물에서 패킷을 어떻게 안전하게 오려내나?</td><td>RecvMsgDiv (CServer.cpp:349)</td></tr>
+<tr><td>14</td><td><a href="0014-blocking-limits.html">블로킹의 한계</a></td><td>thread-per-client는 왜 무너지고, 왜 결국 IOCP인가?</td><td>워커 2개의 근거</td></tr>
+<tr><td>15</td><td><a href="0015-connection-lifecycle.html">연결의 죽음</a></td><td>FIN·RST·좀비 — 세 가지 죽음을 어떻게 구별·처리하나?</td><td>TimeoutProcess (CServer.cpp:739)</td></tr>
+</table>
+
+<h2>배치 4 — C++ 심화 (표준 라이브러리 · 클래스 설계)</h2>
+<table>
+<tr><th>#</th><th>레슨</th><th>핵심 질문</th><th>앵커 코드</th></tr>
+<tr><td>16</td><td><a href="0016-vector-internals.html">std::vector 내부</a></td><td>재할당은 언제 일어나고, 무엇을 썩게 하나?</td><td>CSector.cpp</td></tr>
+<tr><td>17</td><td><a href="0017-copy-and-rule-of-three.html">복사와 Rule of Three</a></td><td>CMessageBuffer는 왜 복사되면 안 되나?</td><td>CMessageBuffer.h</td></tr>
+<tr><td>18</td><td><a href="0018-operator-overloading.html">연산자 오버로딩</a></td><td>buf &lt;&lt; x 는 어떤 함수 호출로 번역되나?</td><td>CMessageBuffer &lt;&lt;/&gt;&gt;</td></tr>
+<tr><td>19</td><td><a href="0019-templates.html">템플릿 기초</a></td><td>하나의 틀에서 어떻게 여러 타입의 클래스가 나오나?</td><td>CLockFreeStack&lt;T&gt;, CMemoryPool&lt;T&gt;</td></tr>
+<tr><td>20</td><td><a href="0020-static.html">static의 네 가지 얼굴</a></td><td>스레드 함수에 왜 this를 인자로 넘기나?</td><td>CMessageBuffer::pool, AcceptThread</td></tr>
+</table>
+
+<h2>배치 5 — C++ 마무리 + CS 심화 진입</h2>
+<table>
+<tr><th>#</th><th>레슨</th><th>핵심 질문</th><th>앵커 코드</th></tr>
+<tr><td>21</td><td><a href="0021-casting.html">캐스팅 4형제</a></td><td>(SOCKADDR*), (CServer*)lpParam은 각각 어떤 변환인가?</td><td>CServer.cpp 곳곳의 캐스팅</td></tr>
+<tr><td>22</td><td><a href="0022-compile-and-link.html">컴파일과 링크</a></td><td>NetLib.lib는 어떻게 만들어지고 exe에 흡수되나?</td><td>NetLib/FighterServer 분리 빌드</td></tr>
+</table>
+
+<h2>파생 문서 (질문에서 태어난 심화)</h2>
+<p>레슨을 보다 생긴 질문·오답은 <code>NNNN-K-주제.html</code>로 만들어져 부모 레슨과 서로 링크된다.</p>
+<table>
+<tr><th>#</th><th>문서</th><th>태어난 계기</th></tr>
+<tr><td>1-1</td><td><a href="0001-1-padding-rules-and-pointer-size.html">패딩의 두 규칙, 그리고 포인터의 크기</a></td><td>레슨 1 퀴즈 1·3 오답 (2026-07-06)</td></tr>
+<tr><td>3-1</td><td><a href="0003-1-why-heap-allocation-is-expensive.html">"비싼 연산"의 정체 — new 한 번에 벌어지는 일</a></td><td>레슨 3 질문: OS 할당자 비용의 실체 (2026-07-12)</td></tr>
+<tr><td>4-1</td><td><a href="0004-1-const-positions.html">const의 위치가 바꾸는 것</a></td><td>레슨 4 질문: const 위치별 의미 (2026-07-12)</td></tr>
+<tr><td>6-1</td><td><a href="0006-1-address-translation.html">주소 변환의 실제 기계</a></td><td>레슨 6 지적: "어떻게"가 빠졌다 (2026-07-12)</td></tr>
+</table>
+
+<h2>다음 배치 (예정)</h2>
+<p>배치 5 — <strong>C++ 마무리 + CS 심화 진입 (A11~A13, B6~B7)</strong>: 캐스팅 4형제와 (SOCKADDR*) 캐스팅, 컴파일·링크 모델(NetLib.lib가 만들어지는 과정), 이동 시맨틱·스마트 포인터, 프로세스와 스레드·스케줄러, 자료구조 선택학. 전체 순서는 <a href="../reference/full-curriculum.html">전체 지도</a>의 진행 원칙 참조.</p>
+
+<h2>참조 자료</h2>
+<ul>
+<li><a href="../reference/full-curriculum.html">전체 커리큘럼 지도 (깊이 우선 완전판)</a> — 기둥 A~F, 약 65개 레슨 + 재구현 프로젝트의 전체 그림과 현재 진도</li>
+<li><a href="../reference/codebase-map.html">코드베이스 지도</a> — 전체 구조와 패킷 생애주기</li>
+<li><a href="../RESOURCES.md">RESOURCES.md</a> — 검증된 외부 학습 자료</li>
+<li><a href="../MISSION.md">MISSION.md</a> — 우리가 여기 있는 이유</li>
+</ul>
+
+<div class="lesson-footer">막히면 언제든 에이전트에게. 좋은 질문일수록 코스가 좋아진다.</div>
+</main>

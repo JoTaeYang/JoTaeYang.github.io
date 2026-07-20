@@ -1,0 +1,110 @@
+<title>레슨 15 — 연결의 죽음: FIN, RST, 그리고 좀비</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0015 · 네트워크 · 연결 수명</div>
+<h1>연결의 죽음: FIN, RST, 그리고 좀비</h1>
+<p class="lede">연결을 맺는 법은 하나(3-way)지만 죽는 법은 세 가지다 — 예의 바르게(FIN), 난폭하게(RST), 그리고 <em>말없이</em>(좀비). 오늘의 목표: 세 죽음을 구별하고, 이 서버의 30초 좀비 스윕이 왜 필수 장비인지 코드로 확인한다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+운영 중인 게임서버의 세션 수가 슬금슬금 늘어 만석이 되는 사고 — 원인은 거의 항상 "죽었는데 죽은 줄 모르는 연결"이다. <a href="../NetLib/CServer.cpp">TimeoutProcess(CServer.cpp:739)</a>의 20줄은 그 사고를 막는 보험이고, 최근 커밋("Harden NetLib: zombie timeout…")에서 <em>일부러 추가된</em> 방어 장비다. 재작성 시 빠뜨리기 가장 쉬운 부품이기도 하다.
+</div>
+
+<h2>1. 지식 — 세 가지 죽음</h2>
+
+<h3>죽음 ①: FIN — 예의 바른 작별</h3>
+<p>한쪽이 "더 보낼 것 없음"을 선언(FIN)하면 상대가 ACK하고, 반대 방향도 같은 절차를 밟는다(4-way). 우리 코드에서의 목격 장면: <strong>recv가 0을 반환</strong>(레슨 12), IOCP에서는 <strong>완료 크기 0</strong>. 주의: FIN은 "나 그만 <em>보냄</em>"이지 "너도 그만 보내"가 아니다 — 반쪽만 닫힌(half-close) 상태가 존재한다.</p>
+<p>부산물이 <strong>TIME_WAIT</strong>다: 먼저 닫은 쪽은 마지막 ACK 유실에 대비해 소켓을 수십 초간 붙들고 있는다. 서버를 재시작할 때 bind가 10048로 실패하는 흔한 범인(레슨 12 질문 세트) — 그래서 실전 서버는 "클라이언트가 먼저 닫게" 유도하거나 SO_REUSEADDR을 쓴다.</p>
+
+<h3>죽음 ②: RST — 난폭한 절단</h3>
+<p>정상 절차 없이 연결을 즉사시키는 세그먼트. 죽은 연결로 데이터가 왔을 때, 프로세스가 강제 종료됐을 때, 또는 서버가 <em>고의로</em> 즉시 끊을 때 발생한다. recv/WSARecv는 오류(WSAECONNRESET 등)로 통지받는다. 이 서버의 <code>SocketClose</code>가 하는 <code>closesocket</code>도 조건에 따라 RST 경로를 탄다 — 프로토콜 위반자(레슨 13)에게 예의를 차릴 이유가 없기 때문이다.</p>
+
+<h3>죽음 ③: 좀비 — 말없는 실종</h3>
+<p>랜선이 뽑히거나, 폰이 터널에 들어가거나, 공유기가 죽으면? <strong>아무 패킷도 오지 않는다.</strong> FIN도 RST도 없다. TCP는 "조용함"과 "죽음"을 구별하지 못하므로(레슨 11에서 예고한 '생사 통보 없음'), 서버의 세션은 영원히 ESTABLISHED로 남는다 — 세션 슬롯, 링버퍼 8KB, 캐릭터 슬롯을 문 채로. 9500석 극장에 유령 관객이 쌓이는 것이다.</p>
+<p>해법은 애플리케이션 차원의 시간 감시뿐이다. 이 서버의 실물:</p>
+<pre><code>// RecvMsgDiv 안 — 모든 수신은 생존 신고다 (CServer.cpp:355)
+pSession-&gt;dwLastRecvTime = timeGetTime();
+
+// TimeoutProcess — GameThread가 1초에 한 번 전 세션을 훑는다 (CServer.cpp:739)
+for (unsigned int iCnt = 0; iCnt &lt; maxSession; iCnt++) {
+    stSESSION* pSession = &amp;m_sessionArray[iCnt];
+    if (pSession-&gt;mode == MODE_NULL || pSession-&gt;sock == INVALID_SOCKET)
+        continue;
+    if (now - pSession-&gt;dwLastRecvTime &gt;= sessionTimeoutMs)   // 30초 무소식이면
+        SocketClose(pSession);                                 // 소켓을 닫아 정리 경로로
+}</code></pre>
+<p>설계 디테일 세 가지를 음미하라: ① 스윕 자체도 1초에 한 번만(<code>dwLastTimeoutCheck</code>) — 매 틱 9500개 순회는 낭비다. ② 직접 세션을 파괴하지 않고 <code>SocketClose</code>만 한다 — 소켓이 닫히면 걸려 있던 IO가 실패로 완료되고, 그 완료 처리 과정에서 <em>정상 종료와 같은 경로로</em> 세션이 정리된다. 죽음의 경로를 하나로 통일한 것. ③ 30초라는 값은 <a href="../FighterServer/main.cpp">main.cpp:24</a>에서 게임이 정한다(<code>SetSessionTimeout(30000)</code>) — 정책은 게임의 것, 메커니즘은 엔진의 것(레슨 5의 경계 설계 그대로).</p>
+
+<h2>2. 스킬 — 세 가지 죽음을 직접 목격하기</h2>
+<p>레슨 14에서 개조한 thread-per-client 에코 서버에 <code>dwLastRecvTime</code>식 타임아웃(10초)을 넣는 것이 이번 손코딩 과제다. 힌트: 클라이언트 처리 루프의 recv 앞에 <code>setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, ...)</code>로 수신 타임아웃을 거는 방법(블로킹 서버식)과, 별도 감시 스레드를 두는 방법(CServer식) 중 하나를 고르라 — 왜 그쪽을 골랐는지 설명할 수 있어야 한다.</p>
+<p>관찰 실험:</p>
+<pre><code># 죽음 ① FIN: 클라이언트에서 $c.Close() → 서버 recv가 0 반환하는지
+# 죽음 ② RST: 클라이언트 PowerShell 창을 X로 강제 종료 → recv가 오류를 뱉는지
+# 죽음 ③ 좀비: 클라이언트를 연 채 아무것도 안 보내기 → 10초 뒤 서버가 끊는지
+# 그리고 TIME_WAIT 목격:
+netstat -ano | findstr TIME_WAIT     # 방금 닫은 연결의 유령을 확인하라</code></pre>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>TCP에 keepalive 옵션이 있다던데 그걸 쓰면 되지 않나요?</summary><div class="faq-a">
+<p>있다(SO_KEEPALIVE). 그러나 기본 주기가 <strong>2시간</strong>이고(조정 가능하지만 시스템 전역 영향), "TCP가 살아있는가"만 검사한다 — 게임 클라이언트가 행(hang) 걸려서 TCP 스택은 살아있는데 게임은 죽은 경우를 못 잡는다. 게임서버는 "30초간 <em>게임 패킷</em>이 없으면 죽은 것"이라는 애플리케이션 수준 판정이 정확하고 빠르다. 클라이언트가 주기적으로 보내는 하트비트/에코 패킷(이 프로토콜의 echo 252/253이 그 역할을 겸한다)과 세트로 완성된다.</p>
+</div></details>
+
+<details class="faq"><summary>30초는 어떻게 정한 값인가요? 5초면 더 빨리 잡을 텐데요.</summary><div class="faq-a">
+<p>거짓 양성과의 균형이다. 5초면 지하철 순간 끊김, Wi-Fi 로밍, 일시적 혼잡에도 정상 유저가 잘려 나간다(그리고 재접속 폭주가 온다 — 2차 재해). 너무 길면 유령이 자원을 오래 문다. 30초는 "하트비트 주기 × 여유 배수"로 정하는 것이 통례다. 정책 값이라 main.cpp에서 게임이 정하게 해 둔 것 — 게임 장르(격투 vs MMO)마다 답이 다르기 때문이다.</p>
+</div></details>
+
+<details class="faq"><summary>TIME_WAIT는 왜 하필 먼저 닫은 쪽에 생기나요?</summary><div class="faq-a">
+<p>마지막 ACK를 보낸 쪽이기 때문이다. 그 ACK가 유실되면 상대가 FIN을 재전송하는데, 그때 응답해 줄 누군가가 남아 있어야 한다 — 그래서 먼저 닫은 쪽이 잠시(2×최대 세그먼트 수명) 대기한다. 부수 효과로 같은 4튜플의 늦게 도착한 옛 세그먼트가 새 연결에 섞이는 것도 막는다. 귀찮은 존재가 아니라 TCP의 마지막 예의다.</p>
+</div></details>
+
+<details class="faq"><summary>SocketClose만 하고 세션 정리는 왜 다른 데서 하나요? 그 자리에서 하면 되잖아요.</summary><div class="faq-a">
+<p>레슨 14의 마지막 질문(커널이 버퍼를 쓰고 있다)과 같은 뿌리다. 이 세션에는 걸려 있는 WSARecv가 있고, 다른 스레드가 SendQ를 만지고 있을 수도 있다. 그 자리에서 세션을 파괴하면 진행 중인 IO가 해제된 메모리를 밟는다(레슨 3의 use-after-free, 멀티스레드판). closesocket은 걸린 IO들을 <em>실패로 완료</em>시키고, 모든 IO가 빠져나간 것이 확인된 뒤(lIOCount==0) GameThread가 단독으로 릴리즈한다 — 배치 4·5의 세션 수명 관리가 이 한 질문에서 자라난다.</p>
+</div></details>
+
+<details class="faq"><summary>클라이언트 쪽도 서버가 죽은 걸 모르는 좀비 상태가 되나요?</summary><div class="faq-a">
+<p>완전히 대칭이다. 서버가 소리 없이 사라지면(정전, 커널 패닉) 클라이언트의 연결도 유령이 된다 — 게임 클라이언트가 자체 타임아웃과 "서버와의 연결이 끊어졌습니다" 팝업을 구현하는 이유다. 프로토콜의 SC_ECHO(253, 서버→클라 응답)가 클라이언트 쪽 생존 판정 재료가 된다. 네트워크 프로그래밍의 진실: <strong>상대의 생사는 언제나 추정이며, 침묵의 해석은 각자의 몫이다.</strong></p>
+</div></details>
+
+<details class="faq"><summary>mode == MODE_NULL 검사는 왜 하나요? 죽은 세션이면 sock 검사로 충분하지 않나요?</summary><div class="faq-a">
+<p>세션 배열은 9500칸이 <em>항상 존재</em>하고(레슨 3 — 시작 시 전부 할당), 빈 칸은 mode로 표시된다. 빈 칸의 dwLastRecvTime은 옛 세션의 잔해라 시간 비교가 무의미하다 — 검사 없이 훑으면 빈 칸을 "30초 무수신 좀비"로 오판해 이미 죽은 소켓을 또 닫는 헛발질을 한다. "배열 재사용 + 상태 플래그" 설계에서는 순회마다 상태 필터가 첫 줄이 되는 이유다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://beej.us/guide/bgnet/html/split/close-and-shutdown-get-outta-my-face.html">Beej's Guide — close and shutdown</a>. TIME_WAIT 심화: <a href="https://learn.microsoft.com/en-us/windows/win32/winsock/graceful-shutdown-linger-options-and-socket-closure-2">Microsoft Learn — Graceful Shutdown, Linger Options</a>.</li>
+<li>배치 3 완료. 이제 <a href="../NetLib/CServer.cpp">CServer.cpp</a>의 Start(11~83행)와 AcceptThread(99행~)를 원본으로 통독하라 — IOCP 두 줄(20, 134행)만 빼고 전부 읽힐 것이다. 그 두 줄이 배치 4다.</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0014-blocking-limits.html">레슨 14</a> · 다음 배치(IOCP 아크) 예정 · <a href="../reference/codebase-map.html">코드베이스 지도</a><br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0015-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: '랜선이 뽑힌 클라이언트의 세션이 서버에 영원히 남는 이유는?',
+  options: ['어떤 종료 신호도 서버에 도착하지 않아서', 'TCP가 연결을 2시간 동안 보존해 주기에', '서버의 recv 호출이 실패를 반환하기 때문'],
+  answer: 0,
+  explain: 'FIN도 RST도 물리적으로 발송되지 못한다. TCP는 침묵과 죽음을 구별할 수 없으므로, 애플리케이션이 시간(dwLastRecvTime)으로 판정하는 수밖에 없다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'TimeoutProcess가 세션을 직접 릴리즈하지 않고 SocketClose만 하는 이유는?',
+  options: ['진행 중 IO가 있어 즉시 파괴는 위험해서다', '릴리즈는 커널만 수행할 수 있는 작업이라서', '소켓을 먼저 닫아야 TIME_WAIT가 안 생겨서'],
+  answer: 0,
+  explain: '걸려 있는 WSARecv 등이 세션 메모리를 참조 중이다. 소켓을 닫으면 그 IO들이 실패로 완료되며 빠져나가고, lIOCount가 0이 된 뒤 정상 경로로 릴리즈된다 — 죽음의 경로 단일화.'
+});
+Quiz(document.getElementById('q3'), {
+  q: 'recv 반환값으로 본 세 가지 죽음의 매핑으로 옳은 것은?',
+  options: ['0은 FIN, 음수는 RST, 좀비는 반환 없음', '0은 RST, 음수는 FIN, 좀비는 즉시 음수', '셋 모두 recv가 0을 반환하여 구별 불가'],
+  answer: 0,
+  explain: 'FIN=정상 스트림 종료(0), RST=오류(SOCKET_ERROR + WSAECONNRESET), 좀비=아무 일도 안 일어남(그래서 시간 감시가 필요). 이 매핑은 IOCP 완료 통지에서도 동일하다.'
+});
+</script>

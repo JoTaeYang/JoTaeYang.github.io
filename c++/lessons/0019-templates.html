@@ -1,0 +1,142 @@
+<title>레슨 19 — 템플릿 기초: 타입을 인자로 받는 코드</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0019 · C++ 심화 · 템플릿</div>
+<h1>템플릿 기초: 타입을 인자로 받는 코드</h1>
+<p class="lede"><code>CLockFreeQueue&lt;unsigned __int64&gt;</code>와 <code>CLockFreeQueue&lt;CMessageBuffer*&gt;</code>는 같은 코드에서 나온 서로 다른 클래스다. 오늘의 목표: 템플릿이 "타입을 붕어빵 틀에 부어 클래스를 찍어내는" 원리를 이해하고, 이 서버의 락프리 자료구조 선언이 읽히게 만든다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+이 서버의 재사용 부품은 전부 템플릿이다: <a href="../NetLib/CMemoryPool.h">CMemoryPool&lt;T&gt;</a>, <a href="../NetLib/CLockFreeStack.h">CLockFreeStack&lt;T&gt;</a>, <a href="../NetLib/CLockFreeQueue.h">CLockFreeQueue&lt;T&gt;</a>. 세션 인덱스 스택도, 송신 큐도, 메시지 풀도 같은 틀에서 타입만 바꿔 찍어냈다. 템플릿 문법을 못 읽으면 기둥 E(락프리)의 코드가 통째로 벽이 된다. 오늘이 그 벽을 허무는 날이다.
+</div>
+
+<h2>1. 지식 — 붕어빵 틀과 붕어빵</h2>
+
+<h3>문제: 타입만 다른 똑같은 코드</h3>
+<p>세션 인덱스(정수)를 담는 스택과 메시지 버퍼(포인터)를 담는 스택이 필요하다. 로직은 <em>완전히 같다</em> — Push, Pop, CAS. 타입만 다르다. 복붙으로 두 벌을 만들면? 버그를 두 곳에서 고쳐야 하고, 세 번째 타입이 필요하면 또 복붙이다. 템플릿은 이 문제를 푼다.</p>
+
+<h3>틀 만들기: template&lt;typename T&gt;</h3>
+<p><a href="../NetLib/CLockFreeStack.h">CLockFreeStack.h</a>의 뼈대:</p>
+<pre><code>template&lt;typename T&gt;          // "T라는 타입을 나중에 받겠다"
+class CLockFreeStack {
+    struct Node {
+        T        data;         // T 자리에 실제 타입이 들어온다
+        Node*    next;
+    };
+public:
+    void Push(T value);        // 매개변수도 T
+    bool Pop(T&amp; outValue);
+};</code></pre>
+<p><code>T</code>는 <strong>타입 매개변수</strong>다 — 함수가 값을 인자로 받듯, 템플릿은 <em>타입을</em> 인자로 받는다. <code>typename T</code>는 "T는 앞으로 나올 어떤 타입의 자리표시자"라는 선언이다.</p>
+
+<h3>붕어빵 찍기: 인스턴스화(instantiation)</h3>
+<p><a href="../NetLib/CServer.cpp">CServer.cpp</a>에서 실제 사용:</p>
+<pre><code>CLockFreeStack&lt;unsigned __int64&gt;* sessionIndexStack;   // T = unsigned __int64
+CLockFreeQueue&lt;CMessageBuffer*&gt;* recvNotifyQ;          // T = CMessageBuffer*
+</code></pre>
+<p><code>&lt;unsigned __int64&gt;</code>를 붙이는 순간, 컴파일러는 틀의 모든 <code>T</code>를 <code>unsigned __int64</code>로 <strong>치환한 진짜 클래스를 생성</strong>한다. 이것이 인스턴스화다. <code>&lt;CMessageBuffer*&gt;</code>를 쓰면 또 다른 클래스가 생성된다. 두 클래스는 소스는 하나지만 <strong>기계어는 별개</strong>다 — 즉 템플릿은 "컴파일러를 위한 코드 생성기"이지 실행 시점 기능이 아니다.</p>
+
+<div class="box insight">
+<div class="box-title">핵심 통찰: 템플릿은 컴파일 타임이다</div>
+<code>&lt;T&gt;</code> 치환은 전부 컴파일 시점에 끝난다. 실행 성능은 그 타입으로 직접 손코딩한 것과 <strong>완전히 동일</strong>하다 — 추상화의 비용이 0이다. 이것이 자바 제네릭(런타임 타입 소거)이나 <code>void*</code> 기반 컨테이너와 결정적으로 다른 점이고, 고성능 서버가 템플릿을 사랑하는 이유다. 대가는 "타입마다 코드가 복제되어 실행 파일이 커진다"(코드 팽창)와 "에러 메시지가 길다".
+</div>
+
+<h3>왜 템플릿은 헤더에 다 쓰나 — 실무 함정 예고</h3>
+<p>레슨에서 눈치챌 것: 이 서버의 템플릿 클래스(<code>CLockFreeStack.h</code> 등)는 선언과 <em>구현이 전부 .h 파일 안에</em> 있다. 일반 클래스처럼 .cpp로 분리하지 않는다. 이유: 컴파일러가 <code>CLockFreeStack&lt;int&gt;</code>를 찍어내려면 <em>사용하는 그 순간에</em> 틀의 전체 코드를 봐야 하기 때문이다. .cpp에 숨어 있으면 못 본다. 자세한 링크 모델은 레슨 22(컴파일·링크)에서 다루지만, "템플릿=헤더에"는 지금 규칙으로 챙겨두라.</p>
+
+<h2>2. 스킬 — 나만의 템플릿 스택 찍어내기</h2>
+<p>락프리는 아직 안 배웠으니(기둥 E), 락 없는 단순 스택으로 <em>템플릿 문법만</em> 익힌다. <code>scratch\template_check.cpp</code>:</p>
+<pre><code>#include &lt;cstdio&gt;
+
+template&lt;typename T&gt;
+class Stack {
+    T    items[16];
+    int  count = 0;
+public:
+    void Push(T v)      { items[count++] = v; }
+    T    Pop()          { return items[--count]; }
+    int  Size()         { return count; }
+};
+
+int main() {
+    // 같은 틀에서 두 개의 다른 클래스를 찍어낸다:
+    Stack&lt;int&gt; si;              // T = int
+    si.Push(10); si.Push(20);
+    printf("int 스택: %d %d\n", si.Pop(), si.Pop());
+
+    Stack&lt;const char*&gt; ss;      // T = const char* (문자열 포인터)
+    ss.Push("hello"); ss.Push("world");
+    printf("문자열 스택: %s %s\n", ss.Pop(), ss.Pop());
+
+    // TODO(1): Stack<double> 을 만들어 3.14, 2.71 을 넣고 빼서 출력하라.
+    //          새 코드는 로직 0줄 — <double> 하나로 클래스가 생성된다.
+
+    // TODO(2): Stack<CCharacter*> 처럼 포인터 타입도 되는지 생각해보라.
+    //          (이 서버의 세션 스택이 정확히 이런 형태다)
+}</code></pre>
+<pre><code>cl /EHsc /nologo template_check.cpp &amp;&amp; template_check.exe</code></pre>
+<p>관찰: <code>Stack&lt;int&gt;</code>와 <code>Stack&lt;const char*&gt;</code>가 <em>같은 8줄</em>에서 나왔지만 완전히 다른 타입으로 동작한다. <strong>실험</strong>: <code>si.Push("hello")</code>처럼 int 스택에 문자열을 넣어 보라 — 컴파일 에러가 난다. 템플릿은 타입 안전성을 <em>유지한 채</em> 재사용을 준다(void* 방식은 이 안전성을 잃는다). 이 에러 메시지의 생김새도 봐두라(템플릿 에러는 길다).</p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>typename과 class는 뭐가 다른가요? template&lt;class T&gt;도 봤는데요.</summary><div class="faq-a">
+<p>템플릿 매개변수 선언에서 <code>typename T</code>와 <code>class T</code>는 <strong>완전히 같다</strong> — 취향 차이다(역사적 이유로 둘 다 허용). 여기서 <code>class</code>는 "클래스 타입만 받는다"는 뜻이 아니라 그냥 "타입 매개변수"라는 뜻이라, int 같은 기본 타입도 받는다. 혼동을 줄이려 요즘은 <code>typename</code>을 권하는 편이다. 이 코드베이스는 <code>typename</code>을 쓴다.</p>
+</div></details>
+
+<details class="faq"><summary>함수도 템플릿으로 만들 수 있나요?</summary><div class="faq-a">
+<p>있다 — 함수 템플릿이다. <code>template&lt;typename T&gt; T Max(T a, T b) { return a &gt; b ? a : b; }</code>처럼. <code>Max(3, 5)</code>는 int 버전을, <code>Max(1.1, 2.2)</code>는 double 버전을 자동 생성한다(인자 타입으로 T를 추론). std::의 수많은 알고리즘(std::sort 등)이 함수 템플릿이다. 클래스 템플릿과 원리는 같다: 타입을 인자로 받아 컴파일 타임에 실체를 찍어낸다.</p>
+</div></details>
+
+<details class="faq"><summary>Stack&lt;int&gt;랑 Stack&lt;double&gt;은 정말로 별개의 클래스인가요?</summary><div class="faq-a">
+<p>완전히 별개다. 서로 대입도 안 되고(<code>Stack&lt;int&gt; = Stack&lt;double&gt;</code> 불가), 각자의 기계어 코드가 실행 파일에 따로 들어간다. "Stack"이라는 <em>틀</em>은 하나지만 <em>제품</em>은 타입마다 다르다. 그래서 이 서버가 unsigned __int64용 큐와 CMessageBuffer*용 큐를 둘 다 쓰면, 링크된 바이너리에는 큐 코드가 두 벌 들어 있다(코드 팽창의 실체).</p>
+</div></details>
+
+<details class="faq"><summary>왜 세션 인덱스 스택은 포인터가 아니라 unsigned __int64(정수)를 담나요?</summary><div class="faq-a">
+<p>인덱스 자체가 값이기 때문이다. 스택이 관리하는 건 "몇 번 슬롯이 비어 있나"라는 정수 목록이지, 어떤 객체가 아니다(레슨 8의 세션 Key 체계와 연결). 반면 recvNotifyQ는 처리할 대상을 가리켜야 하므로 포인터(또는 Key)를 담는다. <strong>담는 게 값이냐 참조냐</strong>가 T의 선택을 정한다 — 템플릿은 그 선택을 코드 복제 없이 표현하게 해준다.</p>
+</div></details>
+
+<details class="faq"><summary>템플릿 에러 메시지가 왜 그렇게 길고 무섭나요?</summary><div class="faq-a">
+<p>컴파일러가 "틀 + 치환된 타입 + 인스턴스화 경로"를 전부 펼쳐 보여주기 때문이다. <code>Stack&lt;int&gt;</code>에 문자열을 넣으면 "Stack&lt;int&gt;를 인스턴스화하는 중, Push(T) 안에서, T=int인데 const char*를 대입 못 함..." 식으로 층층이 나온다. 요령: <strong>에러의 첫 줄과 마지막 줄부터</strong> 읽어라(보통 진짜 원인은 그 근처). C++20의 concepts가 이 문제를 개선했지만 C++14에서는 인내가 필요하다. 익숙해지면 패턴이 보인다.</p>
+</div></details>
+
+<details class="faq"><summary>void*로 아무 타입이나 담는 컨테이너를 만들면 템플릿이 필요 없지 않나요?</summary><div class="faq-a">
+<p>C 시절의 방법이고 지금도 가능하지만 대가가 크다: ① <strong>타입 안전성 상실</strong> — int를 넣고 실수로 포인터로 꺼내도 컴파일러가 못 막는다(레슨 3의 UB로 직행). ② <strong>캐스팅 지옥</strong> — 꺼낼 때마다 수동 형변환. ③ 값 타입은 힙 할당이 강제된다. 템플릿은 이 셋을 전부 해결하면서 성능도 손코딩과 동일하다. "타입 안전 + 무비용 재사용"이 템플릿이 void*를 이긴 이유다 — 고성능 락프리 컨테이너에는 타협 불가능한 조건이다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://www.learncpp.com/cpp-tutorial/template-classes/">learncpp — Template classes</a> 및 앞의 function templates 챕터. 레퍼런스: <a href="https://en.cppreference.com/w/cpp/language/templates">cppreference: Templates</a>(개요만 훑어도 충분).</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0018-operator-overloading.html">레슨 18</a> · <a href="0020-static.html">레슨 20: static의 네 가지 얼굴</a> → · <a href="../reference/full-curriculum.html">전체 지도</a><br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0019-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: 'CLockFreeQueue<unsigned __int64>와 CLockFreeQueue<CMessageBuffer*>의 관계는?',
+  options: ['같은 틀에서 나온 서로 완전히 별개인 클래스', '같은 클래스이며 T만 실행 중에 바뀐다', '전자를 후자가 상속한 부모-자식 관계이다'],
+  answer: 0,
+  explain: '같은 템플릿(틀)에서 타입 치환으로 각각 생성된 독립 클래스다. 소스는 하나, 기계어는 두 벌. 서로 대입도 안 되고 상속 관계도 아니다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: '템플릿의 <T> 치환은 언제 일어나는가?',
+  options: ['컴파일 시점 — 그래서 실행 비용이 0이다', '실행 시점 — 값을 넣을 때마다 타입을 확인한다', '링크 시점 — 여러 .cpp를 합칠 때 결정된다'],
+  answer: 0,
+  explain: '인스턴스화는 컴파일 타임이다. 그 타입으로 직접 짠 코드와 동일한 기계어가 생성되어 추상화 비용이 없다. 이것이 자바 제네릭이나 void* 방식과 결정적으로 다른 점이다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: '템플릿 클래스의 구현을 보통 .cpp가 아니라 .h에 두는 이유는?',
+  options: ['사용 지점에서 틀의 전체 코드를 봐야 인스턴스화되므로', '.h 파일이 .cpp보다 컴파일 속도가 빠르기 때문에', '템플릿은 헤더에서만 문법적으로 허용되기 때문이다'],
+  answer: 0,
+  explain: '컴파일러가 Stack<int>를 찍어내려면 사용하는 그 번역 단위에서 틀의 전체 정의를 봐야 한다. .cpp에 숨으면 못 봐서 링크 에러가 난다. 문법적으로 금지된 건 아니다(명시적 인스턴스화라는 우회로도 있다).'
+});
+</script>

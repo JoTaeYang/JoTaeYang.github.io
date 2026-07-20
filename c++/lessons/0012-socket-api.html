@@ -1,0 +1,144 @@
+<title>레슨 12 — 소켓 API: 에코 서버 손코딩</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0012 · 네트워크 · Winsock</div>
+<h1>소켓 API: 에코 서버 손코딩</h1>
+<p class="lede">모든 TCP 서버는 같은 사다리로 시작한다: <code>WSAStartup → socket → bind → listen → accept → recv/send</code>. 오늘의 목표: 그 사다리로 <strong>동작하는 서버를 처음부터 직접 만들어</strong> 실제 접속을 받아 본다. 미션의 첫 이정표다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+<a href="../NetLib/CServer.cpp">CServer::Start(11~83행)</a>와 <a href="../NetLib/CServer.cpp">AcceptThread(99행~)</a>는 정확히 이 사다리다. IOCP라는 화려한 부분을 걷어내면 뼈대는 오늘 만드는 에코 서버와 같다. 뼈대를 자기 손으로 세워 본 사람만이 나중에 "IOCP가 <em>무엇을 대체했는지</em>"를 안다.
+</div>
+
+<h2>1. 지식 — 사다리의 각 단</h2>
+<p>왼쪽이 우리가 오늘 쓸 호출, 오른쪽이 실제 CServer의 같은 줄이다:</p>
+<table>
+<tr><th>호출</th><th>하는 일</th><th>CServer.cpp</th></tr>
+<tr><td><code>WSAStartup(MAKEWORD(2,2), &amp;wsa)</code></td><td>Winsock 라이브러리 초기화 (Windows 전용 의식)</td><td>17행</td></tr>
+<tr><td><code>socket(AF_INET, SOCK_STREAM, 0)</code></td><td>소켓 생성: IPv4(AF_INET) + TCP(SOCK_STREAM)</td><td>22행</td></tr>
+<tr><td><code>bind(sock, &amp;addr, size)</code></td><td>소켓에 (IP, 포트) 부착 — "20000번 문은 내 것"</td><td>33행</td></tr>
+<tr><td><code>listen(sock, SOMAXCONN)</code></td><td>접속 대기 시작. 백로그 = 미처리 연결 대기열 길이</td><td>40행</td></tr>
+<tr><td><code>accept(sock, ...)</code></td><td>완성된 연결 하나를 꺼낸다 → <strong>새 소켓</strong> 반환</td><td>109행</td></tr>
+<tr><td><code>recv / send</code></td><td>그 연결로 바이트 읽기/쓰기</td><td>(IOCP 버전은 WSARecv/WSASend)</td></tr>
+</table>
+<p>두 가지 통찰이 사다리보다 중요하다:</p>
+<ul>
+<li><strong>소켓은 두 종류다.</strong> listen 소켓은 연결을 <em>낳기만</em> 하는 소켓(데이터 안 흐름), accept가 돌려준 소켓이 실제 대화 소켓이다. CServer가 <code>m_listen_sock</code>과 세션별 <code>sock</code>을 구분해 들고 있는 이유.</li>
+<li><strong>기본 동작은 블로킹이다.</strong> accept는 접속이 올 때까지, recv는 데이터가 올 때까지 <em>그 스레드를 재운다</em>. CServer가 accept 전용 스레드를 따로 두는(66행) 직접적 이유다 — 메인 흐름이 accept에 갇히면 안 되니까.</li>
+</ul>
+
+<h2>2. 스킬 — 45줄 에코 서버</h2>
+<p><code>scratch\echo_server.cpp</code>. TODO 두 곳은 표를 보고 직접 채워라:</p>
+<pre><code>#include &lt;cstdio&gt;
+#include &lt;winsock2.h&gt;
+#include &lt;ws2tcpip.h&gt;
+#pragma comment(lib, "ws2_32.lib")
+
+int main() {
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &amp;wsa);
+
+    SOCKET listenSock = socket(AF_INET, SOCK_STREAM, 0);
+
+    SOCKADDR_IN addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);    // 0.0.0.0 (레슨 11)
+    addr.sin_port = htons(20001);                // 왜 htons인지 말할 수 있어야 한다
+
+    // TODO(1): bind와 listen을 호출하라. 각각 SOCKET_ERROR 검사 포함.
+    //          (힌트: bind는 (SOCKADDR*)&addr 캐스팅 필요 — CServer.cpp:33)
+
+    printf("에코 서버 대기 중 (포트 20001)...\n");
+
+    while (true) {
+        SOCKADDR_IN clientAddr; int len = sizeof(clientAddr);
+        SOCKET client = accept(listenSock, (SOCKADDR*)&amp;clientAddr, &amp;len);
+        if (client == INVALID_SOCKET) break;
+        printf("접속!\n");
+
+        char buf[512];
+        while (true) {
+            int n = recv(client, buf, sizeof(buf), 0);
+            if (n &lt;= 0) break;      // 0=상대가 정상 종료(FIN), 음수=오류
+
+            // TODO(2): 받은 n바이트를 그대로 돌려보내라(send).
+            //          send의 반환값(실제 보낸 바이트 수)도 확인할 것.
+        }
+        printf("종료 (recv 반환 관찰: 정상 종료면 0)\n");
+        closesocket(client);
+    }
+    closesocket(listenSock);
+    WSACleanup();
+}</code></pre>
+<pre><code>cl /EHsc /nologo echo_server.cpp &amp;&amp; echo_server.exe</code></pre>
+<p>테스트 — 두 번째 터미널에서 PowerShell 한 줄 클라이언트:</p>
+<pre><code>$c = New-Object Net.Sockets.TcpClient("127.0.0.1", 20001); $s = $c.GetStream()
+$msg = [Text.Encoding]::ASCII.GetBytes("hello server"); $s.Write($msg, 0, $msg.Length)
+$buf = New-Object byte[] 512; $n = $s.Read($buf, 0, 512)
+[Text.Encoding]::ASCII.GetString($buf, 0, $n)      # → "hello server"가 돌아오면 성공!
+$c.Close()</code></pre>
+<p>성공 기준: 보낸 문자열이 그대로 돌아오고, 클라이언트를 닫으면 서버 콘솔에 "종료"가 찍힌다. <strong>이 순간을 기억하라 — 여러분이 처음부터 손으로 만든 첫 네트워크 서버다.</strong></p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>SOCKET이라는 타입의 정체는 뭔가요?</summary><div class="faq-a">
+<p>커널이 관리하는 연결 객체를 가리키는 <strong>번호표(핸들)</strong>다. 실제 연결 상태(버퍼, 시퀀스 번호, 4튜플)는 전부 커널 안에 있고, 우리는 번호표를 제시하며 "이 연결로 보내/받아 줘"라고 부탁할 뿐이다. 파일 핸들과 같은 사상이라 Windows에서는 소켓을 <code>CreateIoCompletionPort</code>에 파일 핸들처럼 넘길 수 있다 — IOCP 아크의 문을 여는 열쇠가 되는 사실이다.</p>
+</div></details>
+
+<details class="faq"><summary>bind가 SOCKET_ERROR로 실패하는 흔한 이유는요?</summary><div class="faq-a">
+<p>1위는 "이미 그 포트를 누가 쓰고 있음"(WSAEADDRINUSE, 10048) — 서버를 두 번 띄웠거나 방금 죽인 서버의 연결이 TIME_WAIT(레슨 15)에 남은 경우다. <code>netstat -ano | findstr :20001</code>로 범인을 찾아라. CServer.cpp:36이 실패 시 <code>WSAGetLastError()</code>를 찍는 것도 이 진단을 위해서다. 에러 코드를 읽는 습관이 네트워크 디버깅의 절반이다.</p>
+</div></details>
+
+<details class="faq"><summary>recv가 0을 반환하는 것과 음수를 반환하는 것의 차이는요?</summary><div class="faq-a">
+<p><strong>0 = 상대가 예의 바르게 떠남</strong>(FIN을 보내고 정상 종료 — "더 보낼 것 없음"의 신호). <strong>음수(SOCKET_ERROR) = 사고</strong>(연결 리셋, 강제 종료 등 — WSAGetLastError로 사유 확인). 두 경우 모두 이 연결은 끝이므로 정리 경로로 보내야 한다. 이 구분은 IOCP에서도 그대로 이어진다: 완료 크기 0 = 정상 종료 통지.</p>
+</div></details>
+
+<details class="faq"><summary>send가 내가 준 것보다 적게 보낼 수도 있다고요?</summary><div class="faq-a">
+<p>그렇다. send는 "커널 송신 버퍼에 <em>복사한</em> 바이트 수"를 반환하는데, 버퍼가 거의 차 있으면 일부만 받아 줄 수 있다. 100바이트를 보내려 했는데 60만 반환됐다면 나머지 40은 다시 보내야 한다 — Beej's Guide의 유명한 "handling partial send()s" 문제다. 실전 서버가 세션별 SendQ를 두고 송신을 상태 기계로 관리하는 근본 이유 중 하나.</p>
+</div></details>
+
+<details class="faq"><summary>listen의 SOMAXCONN(백로그)은 정확히 뭘 제한하나요?</summary><div class="faq-a">
+<p>핸드셰이크가 끝났지만 아직 accept로 꺼내가지 않은 연결들의 <strong>대기열 길이</strong>다. 우리가 accept를 게을리하면 대기열이 차고, 그 뒤에 오는 SYN은 거절당한다. 접속 폭주(오픈 직후!)에 대비해 accept를 빨리 도는 전용 스레드를 두는 이유 — AcceptThread가 accept→세션 생성 외에 아무 일도 안 하는 것이 바로 그 설계다.</p>
+</div></details>
+
+<details class="faq"><summary>이 에코 서버에 클라이언트 두 명이 붙으면 어떻게 되나요?</summary><div class="faq-a">
+<p>안 된다 — 첫 클라이언트의 recv 루프에 갇혀 있는 동안 두 번째는 accept조차 되지 않는다(백로그에서 대기만). 직접 확인해 보라: PowerShell 클라이언트를 두 창에서 띄워 보면 두 번째가 응답을 못 받는다. <strong>이 답답함을 몸으로 느끼는 것이 오늘의 숨은 목표다</strong> — 레슨 14가 정확히 이 문제에서 시작한다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://learn.microsoft.com/en-us/windows/win32/winsock/getting-started-with-winsock">Microsoft Learn — Getting Started with Winsock</a> (오늘 사다리의 1차 소스). 개념 보강: <a href="https://beej.us/guide/bgnet/html/split/system-calls-or-bust.html">Beej's Guide 5장 — System Calls or Bust</a>.</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0011-tcp-ip-big-picture.html">레슨 11</a> · <a href="0013-framing.html">레슨 13: 프레이밍과 재조립</a> → <br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0012-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: 'listen 소켓과 accept가 반환한 소켓의 역할 차이는?',
+  options: ['전자는 연결 생산, 후자가 실제 데이터 통로', '전자는 수신 전용이고 후자는 송신 전용이다', '같은 소켓이며 accept는 참조만 복사해 준다'],
+  answer: 0,
+  explain: 'listen 소켓으로는 데이터가 흐르지 않는다. accept가 연결마다 새 소켓을 만들어 반환하며, 그 소켓이 세션과 1:1로 묶인다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'CServer가 accept를 전용 스레드(AcceptThread)에서 도는 근본 이유는?',
+  options: ['accept가 블로킹이라 다른 일을 못 하게 되므로', 'accept는 스레드당 한 번만 호출 가능한 함수라', '전용 스레드를 쓰면 접속 속도가 2배가 되어서'],
+  answer: 0,
+  explain: '기본 소켓 호출은 블로킹이다. accept에 갇힌 스레드는 접속이 올 때까지 아무것도 못 하므로, 갇혀도 되는 스레드를 따로 배정한 것이다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: 'recv가 0을 반환했다. 올바른 해석은?',
+  options: ['상대가 FIN을 보내고 정상적으로 연결을 닫았다', '수신 버퍼가 비어 있으니 즉시 다시 호출하면 된다', '0바이트짜리 빈 패킷이 하나 도착했다는 뜻이다'],
+  answer: 0,
+  explain: '블로킹 recv는 데이터가 없으면 기다리지, 0을 주지 않는다. 0은 오직 "스트림의 끝(상대의 정상 종료)"이라는 특별한 신호다. TCP에 0바이트 메시지 개념은 없다(경계가 없으므로).'
+});
+</script>

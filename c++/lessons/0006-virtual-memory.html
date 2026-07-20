@@ -1,0 +1,125 @@
+<title>레슨 6 — 가상 메모리: 주소는 거짓말이다</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0006 · CS 기초 · 운영체제</div>
+<h1>가상 메모리: 주소는 거짓말이다</h1>
+<p class="lede">레슨 2에서 <code>%p</code>로 찍은 주소는 사실 RAM의 실제 위치가 아니다. 오늘의 목표: 프로세스가 보는 주소 공간의 정체를 이해하고, 내 프로그램의 스택·힙·코드가 각각 어디에 사는지 직접 찍어서 확인한다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+서버 개발자에게 가상 메모리는 교양이 아니라 실무다. nullptr 크래시가 <em>왜</em> 크래시인지(0번지 페이지는 접근 금지), <code>CCrashDump</code>의 풀메모리 덤프가 <em>무엇을</em> 담는지(프로세스 가상 주소 공간 전체), 9500세션 × 버퍼가 <em>어떻게</em> 수 GB 주소를 예약해도 괜찮은지(예약≠커밋) — 전부 이 레슨의 내용이다.
+</div>
+
+<h2>1. 지식 — 세 개의 거짓말과 그 대가</h2>
+
+<h3>거짓말 ①: "메모리는 전부 내 것이다"</h3>
+<p>x64 Windows에서 모든 프로세스는 자기만의 <strong>가상 주소 공간</strong>을 받는다 (유저 영역만 128TB). FighterServer.exe와 크롬이 똑같이 주소 <code>0x1000</code>을 쓸 수 있다 — 서로 다른 지도이기 때문이다. CPU의 MMU가 페이지 테이블을 보고 가상 주소를 물리 RAM 주소로 실시간 번역한다. <a href="https://pages.cs.wisc.edu/~remzi/OSTEP/vm-intro.pdf">OSTEP: Address Spaces</a></p>
+<p>이 거짓말의 대가로 얻는 것: <strong>격리</strong>. 다른 프로세스의 메모리는 내 지도에 아예 없으므로 버그가 있어도 남을 오염시킬 수 없다.</p>
+<p class="note"><strong>"MMU가 페이지 테이블을 보고 번역한다"가 정확히 어떤 기계인가</strong> — 주소가 페이지 번호와 오프셋으로 쪼개지는 방식, PTE의 권한 비트(0번지 덫·코드 보호·DEP가 전부 여기서 나온다), 왜 표가 4단계 트리인지, TLB가 왜 필수인지는 파생 문서 <a href="0006-1-address-translation.html">6-1: 주소 변환의 실제 기계</a>에서 펼친다. 이 레슨이 <em>무엇</em>이라면 6-1은 <em>어떻게</em>다.</p>
+
+<h3>거짓말 ②: "메모리는 연속이다"</h3>
+<p>번역은 <strong>페이지</strong>(Windows/x64에서 4KB) 단위다. <code>new CCharacter[9500]</code>이 받은 456KB는 가상 주소로는 연속(112개 페이지)이지만, 물리 RAM에서는 조각조각 흩어져 있어도 된다. 힙 단편화 문제가 "그래도 견딜 만한" 이유다.</p>
+
+<h3>거짓말 ③: "할당하면 바로 RAM을 쓴다"</h3>
+<p>Windows는 <strong>예약(reserve)</strong>과 <strong>커밋(commit)</strong>을 구분하고, 커밋조차 실제 물리 페이지 배정은 <em>첫 접근 순간</em>(페이지 폴트)으로 미룬다. 작업 관리자에서 서버의 "커밋 크기"와 "작업 집합(실제 RAM)"이 다른 이유다.</p>
+
+<h3>주소 공간의 지도</h3>
+<pre><code>(높은 주소)
+  ├─ 스택       ← 지역 변수. 아래로 자란다 (스레드마다 1MB씩 따로!)
+  ├─ ...
+  ├─ 힙         ← new/malloc. 위로 자란다
+  ├─ 전역/정적   ← static 변수, 문자열 리터럴
+  ├─ 코드       ← 함수들의 기계어 (읽기+실행 전용)
+  ├─ ...
+  └─ 0번지 근처  ← 접근 금지 구역. nullptr 역참조를 잡는 덫
+(낮은 주소)</code></pre>
+<p>중요한 실무 포인트 하나: <strong>스레드마다 스택이 따로</strong>다. 이 서버가 워커 2 + Accept + Game + Send 스레드를 띄우면 스택만 5개다. "지역 변수는 그 스레드만 본다"는 성질은 멀티스레드 레슨에서 무기가 된다.</p>
+
+<h2>2. 스킬 — 내 프로세스의 지도를 직접 찍기</h2>
+<p><code>scratch\addr_map.cpp</code> — 실행 전에 네 주소의 <em>대소 순서</em>를 예측하라:</p>
+<pre><code>#include &lt;cstdio&gt;
+#include &lt;cstdlib&gt;
+
+int g_global = 1;                      // 전역 영역
+
+void whereAmI() { }                    // 코드 영역
+
+int main() {
+    int local = 2;                     // 스택
+    int* heap = new int(3);            // 힙
+
+    printf("코드(함수):  %p\n", (void*)&amp;whereAmI);
+    printf("전역 변수:   %p\n", (void*)&amp;g_global);
+    printf("힙 객체:     %p\n", (void*)heap);
+    printf("스택 변수:   %p\n", (void*)&amp;local);
+
+    // nullptr 덫 확인 (마지막 줄 — 크래시가 정상!)
+    // int* p = nullptr; *p = 1;       // 주석을 풀고 재실행해 보라
+    delete heap;
+}</code></pre>
+<pre><code>cl /EHsc /nologo addr_map.cpp &amp;&amp; addr_map.exe</code></pre>
+<p>확인할 것: ① 네 영역의 주소가 서로 <em>확연히 다른 구역</em>에 있는가. ② 두 번 실행하면 값이 달라지는가(ASLR). ③ 주석을 풀면 정확히 0xC0000005로 죽는가.</p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>페이지 테이블 번역을 매 접근마다 하면 너무 느리지 않나요?</summary><div class="faq-a">
+<p>맞는 걱정이고, 그래서 CPU 안에 <strong>TLB</strong>(번역 캐시)가 있다. 최근 번역 결과 수백 개를 담아 두고 거의 매번 공짜로 번역한다. TLB에 없을 때(미스)만 페이지 테이블을 걷는 비용을 낸다 — 다음 레슨(캐시)에서 배울 "지역성이 좋으면 빠르다"가 TLB에도 그대로 적용된다. <strong>얼마나 느려지는지 수치로</strong>(번역 한 번에 메모리 4번 읽기 = 5배)는 <a href="0006-1-address-translation.html">파생 6-1</a> 참조.</p>
+</div></details>
+
+<details class="faq"><summary>32비트 프로그램이 메모리를 4GB밖에 못 쓰는 게 이것 때문인가요?</summary><div class="faq-a">
+<p>그렇다. 주소가 32비트면 표현 가능한 가상 주소가 2³² = 4GB뿐이고, Windows는 그중 절반가량을 커널용으로 떼었다. 이 프로젝트가 x64를 강제하는 배경이기도 하다 — 9500세션 서버는 버퍼만으로도 32비트 주소 공간이 갑갑해진다.</p>
+</div></details>
+
+<details class="faq"><summary>스왑(페이지 파일)은 뭔가요?</summary><div class="faq-a">
+<p>물리 RAM이 부족하면 OS가 한동안 안 쓴 페이지를 디스크의 페이지 파일로 내리고, 다시 접근하면(페이지 폴트) 도로 올린다. 디스크는 RAM보다 수만 배 느리므로 <strong>서버가 스왑을 타기 시작하면 사실상 장애</strong>다. 게임서버 운영에서 물리 RAM 여유를 항상 감시하는 이유.</p>
+</div></details>
+
+<details class="faq"><summary>커널 모드/유저 모드가 뭐예요?</summary><div class="faq-a">
+<p>CPU의 두 가지 권한 등급이다. 우리 코드는 유저 모드에서 돌고, 하드웨어·페이지 테이블·소켓 같은 자원은 커널 모드의 OS만 만질 수 있다. <code>WSARecv</code> 같은 시스템 콜을 부르면 유저→커널 전환이 일어나는데 이게 수백 나노초로 <em>비싸다</em>. 이 서버가 SendThread에서 패킷 100개를 <strong>한 번의 WSASend로 배칭</strong>하는 이유가 바로 커널 전환 횟수 절약이다 — IOCP 레슨의 핵심 복선.</p>
+</div></details>
+
+<details class="faq"><summary>CCrashDump의 "풀메모리 덤프"는 그럼 뭘 저장하는 건가요?</summary><div class="faq-a">
+<p>크래시 순간 그 프로세스의 <strong>가상 주소 공간 중 커밋된 모든 페이지</strong> + 각 스레드의 레지스터·스택이다. 그래서 덤프를 WinDbg로 열면 "그때 players[3172].chHP가 몇이었는지"까지 볼 수 있다. 물리 RAM 전체나 다른 프로세스는 담기지 않는다 — 격리 덕분에 담을 수도 없다.</p>
+</div></details>
+
+<details class="faq"><summary>스택은 왜 1MB로 작게 잡나요? 크게 하면 안 돼요?</summary><div class="faq-a">
+<p>스레드마다 하나씩 <em>예약</em>되기 때문이다. 스택을 32MB로 잡고 스레드 1000개를 띄우면 주소 공간 32GB가 스택 예약으로 사라진다. 1MB는 "함수 호출 체인이 정상이라면 충분하고, 폭주(무한 재귀)는 빨리 잡아주는" 균형점이다. <code>_beginthreadex</code> 인자로 조절할 수는 있다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://pages.cs.wisc.edu/~remzi/OSTEP/vm-intro.pdf">OSTEP 13장 — Address Spaces</a> (짧다!). 여유가 되면 <a href="https://pages.cs.wisc.edu/~remzi/OSTEP/vm-paging.pdf">18장 Paging</a>.</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0005-inheritance-virtual.html">레슨 5</a> · <a href="0007-cpu-cache.html">레슨 7: CPU 캐시와 지역성</a> → <br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0006-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: '두 프로세스가 똑같은 주소 0x7FF6A0001000을 각자 사용할 수 있는 이유는?',
+  options: ['프로세스마다 페이지 테이블이 따로 있어서', 'OS가 충돌 시 한쪽을 다른 곳으로 옮겨줘서', '주소가 겹치면 자동으로 메모리를 공유해서'],
+  answer: 0,
+  explain: '가상 주소는 프로세스별 지도의 좌표일 뿐이다. 같은 좌표가 서로 다른 물리 페이지로 번역된다. 충돌 개념 자체가 없다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'nullptr 역참조가 "조용한 오염"이 아니라 즉시 크래시인 이유는?',
+  options: ['컴파일러가 검사 코드를 몰래 넣어 두어서', '0번지 근처 페이지가 접근 금지로 매핑돼서', '주소 0에는 커널 데이터가 저장되어 있어서'],
+  answer: 1,
+  explain: 'OS가 0번지 근처를 일부러 매핑하지 않아 두었다. 접근하면 페이지 폴트 → 액세스 위반(0xC0000005). 하드웨어+OS가 주는 공짜 안전장치다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: '스레드 5개짜리 이 서버에서 스택은 몇 개인가?',
+  options: ['프로세스에 하나 — 스택은 공유 자원이다', '5개 — 스레드마다 자기 스택이 따로 있다', '6개 — 스레드 5개에 힙 전용 스택 1개다'],
+  answer: 1,
+  explain: '스택은 스레드당 하나(각 1MB 예약). 반대로 힙·전역·코드는 모든 스레드가 공유한다 — 이 비대칭이 멀티스레드 문제의 뿌리다.'
+});
+</script>

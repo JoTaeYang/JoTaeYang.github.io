@@ -1,0 +1,119 @@
+<title>레슨 11 — TCP/IP 큰 그림: 연결이라는 약속</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0011 · 네트워크 · TCP/IP</div>
+<h1>TCP/IP 큰 그림: 연결이라는 약속</h1>
+<p class="lede">클라이언트 9500명이 <code>0.0.0.0:20000</code>으로 몰려온다. 오늘의 목표: 주소·포트·연결·스트림이라는 네 단어의 정확한 의미를 잡고, 지금 내 PC의 연결 상태를 직접 들여다본다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+<a href="../FighterServer/main.cpp">main.cpp:17</a>의 <code>server.Start(L"0.0.0.0", 20000, 2, 9500)</code> 한 줄에 이 레슨의 전부가 들어 있다. 0.0.0.0은 뭐고, 20000은 왜 htons를 거치며, TCP가 <em>정확히 무엇을 보장하고 무엇을 보장하지 않는지</em> 모르면 네트워크 서버는 영원히 주문 외우기다.
+</div>
+
+<h2>1. 지식 — 네 단어의 정확한 정의</h2>
+
+<h3>IP 주소: 호스트의 위치, 포트: 그 안의 문</h3>
+<p>IP 주소는 네트워크에서 <em>컴퓨터(호스트)</em>를 찾는 좌표다. 하지만 한 컴퓨터에는 서버가 여러 개 돌 수 있다 — 그래서 16비트 <strong>포트</strong>(0~65535)로 "그 컴퓨터의 몇 번 문"인지를 정한다. TCP 연결 하나는 4개 값의 조합으로 유일하게 식별된다: <code>(내IP, 내포트, 상대IP, 상대포트)</code>. 이 4튜플이 다르면 다른 연결이다 — 클라이언트 9500명이 <em>같은</em> 서버 포트 20000에 동시에 붙을 수 있는 이유다(각자의 IP·포트가 다르므로).</p>
+<p><code>0.0.0.0</code>은 "이 컴퓨터의 <em>모든</em> 네트워크 인터페이스(랜카드)에서 받겠다"는 와일드카드다. <code>127.0.0.1</code>로 바꾸면 같은 컴퓨터에서 오는 접속만 받는다(외부 차단 테스트에 유용).</p>
+
+<h3>계층: 각자 한 가지 걱정만 한다</h3>
+<table>
+<tr><th>계층</th><th>걱정하는 것</th><th>우리 서버에서</th></tr>
+<tr><td>애플리케이션</td><td>바이트의 <em>의미</em></td><td>st_PACKET_HEADER + 게임 프로토콜 (레슨 9)</td></tr>
+<tr><td>TCP</td><td>신뢰성 있는 <em>스트림</em></td><td>SOCK_STREAM 소켓</td></tr>
+<tr><td>IP</td><td>패킷을 상대 호스트까지 <em>배달</em></td><td>(OS가 처리 — 우리는 안 만짐)</td></tr>
+<tr><td>이더넷/Wi-Fi</td><td>바로 옆 장비까지 <em>전송</em></td><td>(하드웨어)</td></tr>
+</table>
+<p>서버 개발자의 영토는 위 두 줄이다. 아래는 OS와 하드웨어가 맡는다 — 단, 아래층의 <em>성질</em>(패킷은 유실·중복·순서 뒤바뀜이 일상)이 위로 새어 올라오는 방식은 알아야 한다.</p>
+
+<h3>TCP의 계약서 — 보장하는 것과 안 하는 것</h3>
+<p>IP까지의 세계는 무법지대다(유실, 중복, 순서 역전). TCP는 그 위에서 재전송·순서번호·ACK로 다음을 <strong>보장한다</strong>:</p>
+<ul>
+<li><strong>연결(connection)</strong>: 통신 전에 3-way 핸드셰이크(SYN → SYN+ACK → ACK)로 양쪽이 상태를 합의한다. <code>accept</code>가 돌려주는 소켓 하나 = 완성된 연결 하나.</li>
+<li><strong>신뢰성</strong>: 보낸 바이트는 빠짐없이, <strong>순서대로</strong>, 중복 없이 도착한다 (연결이 살아있는 한).</li>
+<li><strong>흐름 제어</strong>: 받는 쪽이 소화 못 하면 보내는 쪽이 자동으로 속도를 줄인다 (수신 윈도우).</li>
+</ul>
+<p>그리고 <strong>보장하지 않는 것</strong> 두 가지가 서버 설계 전체를 결정한다:</p>
+<ul>
+<li><strong>메시지 경계 없음</strong>: 바이트 강물일 뿐, "패킷 단위"는 없다 (레슨 10 예고편 → 레슨 13에서 해결).</li>
+<li><strong>상대의 생사 통보 없음</strong>: 랜선이 뽑히면 아무 신호도 오지 않는다 (→ 레슨 15의 좀비 타임아웃).</li>
+</ul>
+
+<h3>htons의 정체 — 엔디언 복선 회수</h3>
+<p><a href="../NetLib/CServer.cpp">CServer.cpp:32</a>의 <code>serveraddr.sin_port = htons(sPort);</code> — <strong>h</strong>ost <strong>to</strong> <strong>n</strong>etwork <strong>s</strong>hort. 인터넷 프로토콜의 헤더 필드는 빅 엔디언(네트워크 바이트 순서)이 표준인데 x64는 리틀 엔디언이다(레슨 9). 그래서 <em>OS에 넘기는 주소 구조체의 포트·IP는</em> 변환이 필수다. 반면 우리 게임 페이로드는 양끝이 모두 x86 계열이라 변환 없이 리틀 엔디언 그대로 — 두 세계의 경계가 정확히 sockaddr 구조체다.</p>
+
+<h2>2. 스킬 — 내 PC의 연결 지도를 읽기</h2>
+<p>컴파일 없이, 관찰 실습이다. PowerShell에서:</p>
+<pre><code># 1) 지금 LISTEN 중인 포트들 — 각 줄이 "열려 있는 문"이다
+netstat -ano | findstr LISTENING
+
+# 2) 브라우저로 아무 사이트나 연 뒤 — ESTABLISHED 연결의 4튜플을 관찰하라
+netstat -ano | findstr ESTABLISHED
+
+# 3) 서버를 빌드해 실행했다면: 20000번 문이 열렸는지 확인
+netstat -ano | findstr :20000</code></pre>
+<p>확인할 것: ① ESTABLISHED 줄에서 (로컬IP:포트, 원격IP:포트) 4튜플을 찾아라. ② 같은 원격 443 포트로 가는 연결이 여러 개라면, 로컬 포트가 어떻게 다른지 보라 — "4튜플이 연결을 식별한다"의 실물이다. ③ 마지막 열의 PID를 작업 관리자에서 찾아 어느 프로세스의 연결인지 맞혀 보라.</p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>UDP는 뭐고, 게임서버는 왜 TCP를 쓰나요? FPS는 UDP라던데.</summary><div class="faq-a">
+<p>UDP는 TCP에서 연결·신뢰성·순서를 전부 뺀 "그냥 던지기"다 — 빠르지만 유실·역전을 애플리케이션이 감당해야 한다. 위치가 0.1초마다 갱신되는 FPS는 "잃어버린 옛 위치는 재전송할 가치가 없다"라서 UDP가 맞고, 아이템 지급·채팅·전투 판정처럼 <em>하나도 잃으면 안 되는</em> 게임은 TCP가 맞다. 이 서버(격투 게임, 판정 서버 권위)는 TCP 선택이 자연스럽다. MMO 업계 표준도 TCP다.</p>
+</div></details>
+
+<details class="faq"><summary>3-way 핸드셰이크는 왜 3번이나 왔다 갔다 하나요?</summary><div class="faq-a">
+<p>양쪽 다 "내 말이 상대에게 닿는다"를 확인해야 하기 때문이다. SYN(나 말할게) → SYN+ACK(들었어, 나도 말할게) → ACK(네 말도 들었어). 2번이면 서버는 자기 응답이 닿았는지 모른 채 연결을 믿어야 한다. 참고로 이 왕복 때문에 연결 수립은 최소 1.5 RTT가 들고 — 그래서 게임 클라이언트는 연결을 <em>한 번 맺고 계속 유지</em>한다. 매 패킷마다 연결하는 HTTP/1.0식 설계가 게임에 없는 이유다.</p>
+</div></details>
+
+<details class="faq"><summary>포트 20000은 왜 20000인가요? 아무거나 써도 되나요?</summary><div class="faq-a">
+<p>거의 아무거나 된다. 관례상 0~1023(잘 알려진 포트: 80=HTTP, 443=HTTPS)은 시스템/표준 서비스용이라 피하고, 49152~65535는 OS가 클라이언트 쪽에 임시로 배정하는 영역(netstat 실습에서 본 로컬 포트들!)이라 피하는 게 안전하다. 그 사이의 등록 포트 영역에서 다른 프로그램과 안 겹치는 번호를 고르면 된다 — 20000은 그냥 그런 선택이다.</p>
+</div></details>
+
+<details class="faq"><summary>흐름 제어(수신 윈도우)가 우리 서버와 무슨 상관이죠?</summary><div class="faq-a">
+<p>깊은 상관이 있다. 서버가 recv를 게을리해서 OS 수신 버퍼가 차면, TCP가 <em>클라이언트의 송신을 자동으로 막는다</em>. 반대 방향도 같다: 클라이언트가 안 받아 가면 서버의 send가 밀린다 — 이 서버의 SendQ가 세션별로 쌓이는 구조인 이유이고, "느린 클라이언트 하나가 서버 전체를 못 물게" 격리하는 설계(세션별 큐 + 배칭)가 필요한 이유다. IOCP 아크에서 재론한다.</p>
+</div></details>
+
+<details class="faq"><summary>localhost(127.0.0.1)로 테스트하면 진짜 네트워크를 타나요?</summary><div class="faq-a">
+<p>랜카드까지 내려가지 않고 OS 안에서 루프백으로 돈다. 그래서 지연·유실·단편화 같은 실전 네트워크 성질이 거의 재현되지 않는다 — 기능 테스트에는 충분하지만 성능·타임아웃 테스트는 별도 머신(또는 최소한 실제 LAN)이 필요하다. Bench/의 벤치마크가 봇 클라이언트를 따로 두는 이유이기도 하다.</p>
+</div></details>
+
+<details class="faq"><summary>서버 IP는 하나인데 클라이언트 9500명의 데이터가 어떻게 안 섞이나요?</summary><div class="faq-a">
+<p>OS가 도착한 TCP 세그먼트의 4튜플을 보고 <em>해당 연결의 수신 버퍼</em>로 분류해 준다. 우리 서버 입장에서는 accept가 돌려준 <strong>소켓 하나 = 연결 하나 = 세션 하나</strong>이고, 그 소켓으로 recv하면 그 클라이언트의 바이트만 나온다. 섞임 방지는 OS의 일, 우리는 소켓↔세션 매핑(stSESSION 배열)만 관리하면 된다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://beej.us/guide/bgnet/html/split/what-is-a-socket.html">Beej's Guide 2~3장</a> (소켓이란 무엇인가, IP와 포트). 한국어 선호 시: <a href="https://www.inflearn.com/course/%EB%84%A4%ED%8A%B8%EC%9B%8C%ED%81%AC-%ED%95%B5%EC%8B%AC%EC%9D%B4%EB%A1%A0-%EA%B8%B0%EC%B4%88">널널한 개발자 — 네트워크 핵심이론(기초)</a>의 TCP 파트.</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0010-ring-buffer.html">레슨 10</a> · <a href="0012-socket-api.html">레슨 12: 소켓 API</a> → <br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0011-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: '클라이언트 9500명이 전부 서버의 20000 포트 하나에 접속할 수 있는 이유는?',
+  options: ['연결은 4튜플로 식별되어 서로 다르기 때문에', '서버가 클라이언트마다 새 포트를 열어 줘서', 'TCP가 포트 하나당 최대 65535명을 허용해서'],
+  answer: 0,
+  explain: '(클라IP, 클라포트)가 저마다 다르므로 4튜플이 전부 다르다. 서버가 accept마다 새 소켓을 만들지만 서버 쪽 포트는 계속 20000이다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'TCP가 보장하지 않아서 우리가 코드(RecvMsgDiv, TimeoutProcess)로 메꿔야 하는 두 가지는?',
+  options: ['메시지 경계 보존과 상대방의 생사 통보', '바이트의 도착 순서와 데이터의 무결성', '전송 속도의 상한과 암호화 기능 제공'],
+  answer: 0,
+  explain: '순서·무결성은 TCP가 준다. 경계 없음은 프레이밍(레슨 13)으로, 생사 불명은 좀비 타임아웃(레슨 15)으로 우리가 해결한다. 암호화도 TCP 밖의 일이지만 이 서버 범위 밖이다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: 'bind에 0.0.0.0 대신 127.0.0.1을 넣으면?',
+  options: ['같은 호스트에서 오는 접속만 받게 된다', '모든 인터페이스에서 접속을 받게 된다', 'DNS 해석에 실패하여 bind가 실패한다'],
+  answer: 0,
+  explain: '127.0.0.1은 루프백 인터페이스에만 문을 여는 것이다. 외부 랜카드로 들어오는 SYN은 그 문에 닿지 않는다. 0.0.0.0이 "모든 인터페이스" 와일드카드다.'
+});
+</script>

@@ -1,0 +1,160 @@
+<title>레슨 13 — 프레이밍과 재조립: RecvMsgDiv 해부</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0013 · 네트워크 · 프로토콜</div>
+<h1>프레이밍과 재조립: RecvMsgDiv 해부</h1>
+<p class="lede">TCP는 경계 없는 바이트 강물이다(레슨 10, 11). 오늘의 목표: 강물에서 "완성된 패킷"을 오려내는 <code>RecvMsgDiv</code>의 45줄을 완전히 해부하고, 같은 로직을 직접 손코딩한다. 배치 2의 링버퍼·직렬화가 실전 투입되는 날이다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+<a href="../NetLib/CServer.cpp">RecvMsgDiv(CServer.cpp:349-394)</a>는 모든 수신 바이트가 통과하는 병목이자, <strong>외부의 악의가 처음 닿는 국경 검문소</strong>다. 재작성할 때 한 글자라도 틀리면 패킷이 밀리거나(멈춤), 조작 패킷이 통과한다(보안 사고). 이해가 아니라 암기 수준까지 가야 하는 몇 안 되는 함수다.
+</div>
+
+<h2>1. 지식 — 검문소의 5단계</h2>
+
+<h3>프레이밍 전략: 길이를 앞세운다</h3>
+<p>경계 없는 스트림에서 메시지를 구분하는 3대 전략 — ① 고정 길이, ② 구분자(개행 등), ③ <strong>길이 헤더</strong>. 바이너리 게임 프로토콜은 거의 항상 ③이다: 헤더 <code>{ byCode 0x89, wSize, byType }</code> 4바이트를 먼저 읽으면 "몸통이 몇 바이트인지" 알 수 있다.</p>
+
+<h3>실제 코드 — 주석은 내가 단다</h3>
+<pre><code>void CServer::RecvMsgDiv(stSESSION* pSession, DWORD dwTransferred)
+{
+    CRingBuffer* RecvRingQ = &amp;pSession-&gt;RecvRingQ;
+    RecvRingQ-&gt;MoveRear(dwTransferred);          // [1] 커널이 링버퍼에 직접 써 준
+                                                  //     dwTransferred바이트를 "인정"
+    pSession-&gt;dwLastRecvTime = timeGetTime();     //     (좀비 판정용 생존 신고 — 레슨 15)
+
+    while (RecvRingQ-&gt;GetUseSize() &gt;= sizeof(st_PACKET_HEADER))   // [2] 헤더만큼은 쌓였나?
+    {
+        RecvRingQ-&gt;Peek((char*)&amp;header, sizeof(st_PACKET_HEADER)); // [3] 꺼내지 말고 훔쳐본다
+
+        if (header.byCode != 0x89 || header.wSize &gt; 4096)          // [4] 국경 검문
+        {
+            SocketClose(pSession);   // 위조 여권 → 즉시 추방. 협상 없음.
+            break;
+        }
+
+        if (RecvRingQ-&gt;GetUseSize() &lt; header.wSize + sizeof(header)) // [5] 몸통이 덜 왔나?
+            break;                   // 기다린다. 다음 recv 완료 때 이어서.
+
+        // [6] 완성! 헤더+몸통을 오려내 CMessageBuffer로
+        pBuffer = CMessageBuffer::Alloc();
+        RecvRingQ-&gt;Dequeue(pBuffer-&gt;GetWriteBufferPtr(), sizeof(header) + header.wSize);
+        pSession-&gt;completeRecvQ.Enqueue(pBuffer);   // GameThread에게 전달
+    }   // while: 한 번의 recv에 패킷 여러 개가 왔을 수도 있으니 반복!
+    ...
+}</code></pre>
+
+<h3>왜 이 순서인가 — 세 개의 정확한 판단</h3>
+<ul>
+<li><strong>Peek이지 Dequeue가 아니다 [3]</strong>: 몸통이 아직 안 왔으면 헤더를 링버퍼에 <em>그대로 두고</em> 물러나야 한다. 꺼내 버리면 다음 recv 때 헤더를 잃는다. "부족하면 아무것도 소비하지 않는다" — 재조립의 제1원칙.</li>
+<li><strong>검증이 대기보다 먼저다 [4]&gt;[5]</strong>: wSize를 믿기 전에 검사한다. 순서를 바꾸면 공격자가 wSize=65535를 보내 "영원히 채워지지 않는 대기"를 만든다(8192 링버퍼에 65539바이트는 못 쌓인다) — 세션 하나가 조용히 잠기는 DoS다. 검증 우선이라 wSize&gt;4096은 그 자리에서 추방된다.</li>
+<li><strong>while이지 if가 아니다 [2]</strong>: TCP는 뭉쳐 보낸다(레슨 10 질문 세트). recv 한 번에 패킷 3.5개가 올 수 있다 — 3개는 지금 처리하고 0.5개는 링버퍼에 남긴다. if로 쓰면 패킷이 한 틱씩 밀리는, 찾기 지독한 버그가 된다.</li>
+</ul>
+
+<h2>2. 스킬 — 재조립기 손코딩</h2>
+<p>링버퍼 대신 단순 배열로, 핵심 로직만 재현한다. <code>scratch\framing_check.cpp</code>:</p>
+<pre><code>#include &lt;cstdio&gt;
+#include &lt;cstring&gt;
+
+#pragma pack(push, 1)
+struct Header { unsigned char code; unsigned short size; unsigned char type; };
+#pragma pack(pop)
+
+class Assembler {
+    char buf[64]; int used = 0;
+public:
+    bool dead = false;
+    void Feed(const char* data, int n) {          // "recv 완료" 시뮬레이션
+        memcpy(buf + used, data, n); used += n;
+        while (!dead &amp;&amp; used &gt;= (int)sizeof(Header)) {
+            Header h; memcpy(&amp;h, buf, sizeof(h));            // Peek
+            // TODO(1): 검증 — code != 0x89 이거나 size > 32면 dead=true; return;
+            // TODO(2): 대기 — used < sizeof(h)+h.size면 return; (소비 없이!)
+            printf("  패킷 완성: type=%d, 몸통 %d바이트\n", h.type, h.size);
+            int total = sizeof(h) + h.size;                  // 소비(Dequeue 상당)
+            memmove(buf, buf + total, used - total); used -= total;
+        }
+    }
+};
+
+int main() {
+    // 패킷: [89 | 05 00 | 10] "HELLO"  +  [89 | 03 00 | 20] "BYE"
+    const char stream[] = "\x89\x05\x00\x10" "HELLO" "\x89\x03\x00\x20" "BYE";
+    int len = sizeof(stream) - 1;   // 마지막 널 제외 (17바이트)
+
+    printf("[A] 잔인하게 1바이트씩 %d번 Feed:\n", len);
+    Assembler a;
+    for (int i = 0; i &lt; len; i++) a.Feed(stream + i, 1);   // 최악의 단편화!
+
+    printf("[B] 한 방에 전부 Feed (뭉침):\n");
+    Assembler b; b.Feed(stream, len);
+
+    printf("[C] 위조 패킷:\n");
+    Assembler c; c.Feed("\xAA\x05\x00\x10", 4);
+    printf("  추방됐는가: %d\n", c.dead);
+}</code></pre>
+<p>통과 기준: [A]와 [B]가 <strong>완전히 같은</strong> 패킷 2개를 출력하고, [C]가 추방된다. 1바이트씩 흘려도 무너지지 않으면 재조립을 이해한 것이다. (실전과의 차이: 우리는 memmove로 앞당기지만 링버퍼는 커서만 돌린다 — 레슨 10에서 배운 그 이유다.)</p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>byCode 0x89는 왜 필요한가요? 길이만 있으면 되지 않나요?</summary><div class="faq-a">
+<p>스트림이 <em>어긋났을 때</em>를 잡는 저비용 안전핀이다. 버그나 조작으로 파싱 위치가 한 바이트라도 밀리면 이후의 모든 "헤더"는 사실 몸통의 일부다 — code 검사가 있으면 1/256 확률로만 우연히 통과하므로 사실상 즉시 발각된다. 완벽한 방어(암호화·서명)는 아니지만, 4바이트 헤더에 1바이트로 살 수 있는 검증으로는 훌륭한 가성비다.</p>
+</div></details>
+
+<details class="faq"><summary>잘못된 패킷이면 그 패킷만 버리면 되지 왜 연결을 끊나요?</summary><div class="faq-a">
+<p>경계가 깨졌기 때문이다. 헤더가 위조면 wSize도 못 믿으므로 "이 패킷의 끝"이 어디인지 알 수 없다 — 다음 패킷의 시작점도 모른다는 뜻이다. 스트림 전체가 오염된 것이라 재동기화할 방법이 없고, 애초에 정상 클라이언트는 위조 헤더를 보낼 일이 없다. "의심되면 끊는다"가 유일하게 안전하고, 가장 싸다.</p>
+</div></details>
+
+<details class="faq"><summary>wSize > 4096 검사에서 4096은 어떻게 정한 숫자죠?</summary><div class="faq-a">
+<p>프로토콜 설계자가 정한 <strong>계약</strong>이다(dfNET_MAX_PAYLOAD): "우리 게임에 4096바이트 넘는 패킷은 존재하지 않는다." 이 상한 덕에 링버퍼 8192가 충분해지고(레슨 10), 상한 초과 = 규약 위반 = 추방이라는 판정이 가능해진다. 상한 없는 프로토콜은 "1GB짜리 패킷을 조립 중"이라는 메모리 폭탄 공격에 노출된다. 프로토콜 v2에서 BYTE(255)→WORD로 <em>넓히면서도</em> 상한(4096)은 반드시 함께 정의한 이유다.</p>
+</div></details>
+
+<details class="faq"><summary>completeRecvQ에 넣고 끝인데, 게임 로직은 언제 실행되나요?</summary><div class="faq-a">
+<p>다른 스레드에서다. RecvMsgDiv는 IOCP 워커 스레드가 실행하고, 큐에 쌓인 완성 패킷은 GameThread가 5ms 틱마다 꺼내 OnRecv로 넘긴다(코드베이스 지도의 패킷 생애주기 3단계). 왜 워커가 직접 게임 로직을 안 돌리나? 게임 상태(players, sectors)를 여러 워커가 동시에 만지면 락 지옥이 되기 때문 — <strong>"게임 상태는 GameThread만 만진다"</strong>는 이 서버의 대헌장이다. 멀티스레드 아크의 중심 주제.</p>
+</div></details>
+
+<details class="faq"><summary>패킷의 앞뒤가 바뀌어 도착하는 경우는 걱정 안 하나요?</summary><div class="faq-a">
+<p>TCP 위에서는 불가능하다 — 순서 보장은 TCP의 계약(레슨 11)이다. IP 계층에서 세그먼트가 뒤섞여 도착해도 커널의 TCP가 순서번호로 재정렬한 뒤에야 우리에게 준다. 우리가 걱정할 것은 순서가 아니라 <em>절단면</em>(어디서 끊겨 오는가)뿐이다. UDP를 쓴다면 이야기가 완전히 달라진다 — 순서·중복·유실을 전부 애플리케이션이 떠안는다.</p>
+</div></details>
+
+<details class="faq"><summary>실습 [A]처럼 1바이트씩 오는 일이 실제로 있나요?</summary><div class="faq-a">
+<p>극단이지만 원리적으로 가능하고, 부분 도착 자체는 일상이다(MTU 분할, 혼잡, Nagle 알고리즘, 악의적 슬로우 전송). 중요한 건 빈도가 아니라 <strong>불변식</strong>이다: "어떤 절단면으로 와도 결과가 같다"가 성립하면 걱정할 일이 없고, 1바이트 테스트는 그 불변식의 가장 잔인한 검증이다. 실전 서버 테스트에서도 이런 "조각내기 봇"을 만들어 검증한다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://beej.us/guide/bgnet/html/split/slightly-advanced-techniques.html">Beej's Guide 7.4-7.5 (partial send, data encapsulation)</a>. 그리고 이제 <a href="../NetLib/CServer.cpp">CServer.cpp:349-394</a> 원본을 처음부터 읽어 보라 — 전부 읽힐 것이다.</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0012-socket-api.html">레슨 12</a> · <a href="0014-blocking-limits.html">레슨 14: 블로킹의 한계</a> → <br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0013-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: '헤더를 Dequeue가 아니라 Peek으로 읽는 이유는?',
+  options: ['몸통 미완성 시 헤더를 남겨둬야 하기 때문', 'Peek이 Dequeue보다 실행 속도가 빨라서다', '헤더는 게임 로직에서 다시 읽어야 해서다'],
+  answer: 0,
+  explain: '몸통이 덜 왔으면 소비 없이 물러나야 다음 recv에서 이어붙일 수 있다. 완성 확인 후에야 헤더+몸통을 한꺼번에 Dequeue한다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: '검증([4])을 완성 대기([5])보다 먼저 하는 이유는?',
+  options: ['조작된 wSize로 인한 영원한 대기를 막으려고', '검증이 대기보다 CPU를 적게 쓰기 때문이다', '먼저 하지 않으면 컴파일 순서가 꼬여서다'],
+  answer: 0,
+  explain: 'wSize=65535 같은 위조 길이를 믿고 기다리면 8192 링버퍼로는 영원히 채워지지 않는다. 믿기 전에 검사 — 신뢰 경계에서의 철칙이다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: '패킷 오려내기가 if가 아니라 while 루프인 이유는?',
+  options: ['recv 한 번에 여러 패킷이 도착할 수 있어서', '한 패킷을 여러 번 나눠 읽어야 하기 때문이다', '루프를 돌아야 링버퍼 커서가 되감기 때문이다'],
+  answer: 0,
+  explain: 'TCP는 뭉쳐 보낸다. 쌓인 완성 패킷을 전부 꺼내야 하며, if면 나머지가 다음 틱으로 밀린다. 반대(한 패킷이 나뉘어 도착)는 [5]의 break가 처리한다.'
+});
+</script>

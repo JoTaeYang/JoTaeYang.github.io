@@ -1,0 +1,142 @@
+<title>레슨 6-1 — 주소 변환의 실제 기계</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0006-1 · 파생 심화 · <a href="0006-virtual-memory.html">레슨 6</a>에서 파생 (지적: "가상 메모리 내용에 뭔가 빠진 것 같다")</div>
+<h1>주소 변환의 실제 기계</h1>
+<p class="lede">레슨 6은 <em>무엇</em>을 말했다 — 주소는 거짓말이고, 페이지 단위이며, 커밋은 미뤄진다. 하지만 <strong>어떻게</strong>를 건너뛰었다. "MMU가 페이지 테이블을 보고 번역한다"는 한 줄 뒤에 실제로 무슨 기계가 도는지, 그리고 그 기계가 어떻게 nullptr 덫·코드 보호·TLB를 <em>하나의 메커니즘</em>으로 설명하는지를 펼친다.</p>
+
+<h2>1. 가상 주소는 두 조각이다</h2>
+<p>번역의 첫 걸음은 자르기다. 페이지가 4KB = 2<sup>12</sup>바이트이므로, 주소의 <strong>하위 12비트</strong>는 "페이지 <em>안에서</em> 몇 번째 바이트인가"를 그대로 표현할 수 있다.</p>
+<pre><code>가상 주소 0x7FF6A0001234 (48비트 사용)
+
+  [ 상위 36비트 = 가상 페이지 번호 ] [ 하위 12비트 = 오프셋 ]
+         0x7FF6A0001                        0x234</code></pre>
+
+<div class="box insight">
+<div class="box-title">핵심 — 오프셋은 번역되지 않는다</div>
+번역이 바꾸는 것은 <strong>페이지 번호뿐</strong>이다. 오프셋 12비트는 손대지 않고 <em>그대로 통과</em>한다. 가상 페이지 <code>0x7FF6A0001</code>이 물리 프레임 <code>0x00A73</code>으로 번역되면, 최종 물리 주소는 <code>0x00A73</code><strong><code>234</code></strong> — 뒤 세 자리는 그대로다.<br>
+그래서 "한 페이지 안에서의 상대 위치"는 가상이든 물리든 항상 같다. <strong>16진수로 읽을 때 마지막 3자리가 오프셋</strong>이라고 외워두면 평생 쓴다.
+</div>
+
+<h2>2. 페이지 테이블 엔트리 — 주소 + 권한</h2>
+<p>페이지 테이블의 한 칸(PTE, 8바이트)은 단순히 "물리 프레임 번호"만 담지 않는다. <strong>권한 비트</strong>가 같이 들어있다:</p>
+<table>
+<tr><th>비트</th><th>뜻</th><th>0이면 / 위반하면</th></tr>
+<tr><td><strong>Present</strong></td><td>이 페이지가 지금 물리 메모리에 매핑돼 있나</td><td>0 → <strong>페이지 폴트</strong></td></tr>
+<tr><td><strong>R/W</strong></td><td>쓰기 허용인가</td><td>0인데 쓰면 → 폴트(액세스 위반)</td></tr>
+<tr><td><strong>U/S</strong></td><td>유저 모드가 접근 가능한가</td><td>0인데 유저가 접근 → 폴트</td></tr>
+<tr><td><strong>NX</strong></td><td>실행 금지 (bit 63)</td><td>1인데 실행하면 → 폴트 (DEP)</td></tr>
+</table>
+
+<div class="box insight">
+<div class="box-title">레슨 6의 두 사실이 여기서 하나로 합쳐진다</div>
+<ul>
+<li><strong>nullptr 역참조가 크래시인 이유</strong> = 0번지 근처 페이지의 <code>Present</code>가 0(아예 매핑 안 함). 접근 → 폴트 → 커널이 "이 주소는 유효하지 않음" 판정 → <code>0xC0000005</code>.</li>
+<li><strong>코드 영역이 읽기+실행 전용인 이유</strong> = 그 페이지들의 <code>R/W</code>가 0. 실수로 함수 본문을 덮어쓰려 하면 하드웨어가 막는다.</li>
+<li><strong>스택·힙에서 코드 실행이 막히는 이유</strong>(DEP) = 그 페이지들의 <code>NX</code>가 1. 버퍼 오버플로로 셸코드를 심어도 실행이 안 된다.</li>
+</ul>
+세 가지가 전부 <strong>같은 기계</strong>다: PTE의 비트를 CPU가 매 접근마다 검사한다. 소프트웨어 검사가 아니라 <em>하드웨어가 공짜로</em> 해준다.
+</div>
+
+<h2>3. 왜 페이지 테이블은 4단계인가 — 계산해보면 안다</h2>
+<p>"페이지 번호 → 프레임 번호" 표를 <strong>평평하게 하나로</strong> 만든다고 해보자:</p>
+<pre><code>가상 페이지 번호 = 36비트 → 표의 칸 수 = 2^36 개
+한 칸(PTE) = 8바이트
+표 크기 = 2^36 × 8 = 2^39 = 512 GB     ← 프로세스 하나당!</code></pre>
+<p><strong>불가능하다.</strong> 128TB 주소 공간 중 실제로 쓰는 건 몇 MB인데, 표가 512GB일 수는 없다.</p>
+<p>해법은 <strong>트리</strong>다. 페이지 번호 36비트를 9비트씩 네 조각으로 쪼개, 4단계로 내려간다:</p>
+<pre><code>[9비트][9비트][9비트][9비트][12비트 오프셋]
+  PML4  PDPT   PD     PT      offset
+   ↓     ↓      ↓      ↓
+  512칸 512칸  512칸  512칸    ← 각 단계는 512개 엔트리
+                              512 × 8바이트 = 4096바이트 = 정확히 한 페이지!</code></pre>
+<p>아름다운 점 둘:</p>
+<ul>
+<li><strong>각 테이블이 정확히 한 페이지에 딱 맞는다</strong>(512 × 8 = 4KB). 우연이 아니라 그렇게 설계한 것.</li>
+<li><strong>안 쓰는 가지는 아예 만들지 않는다.</strong> 128TB 중 몇 MB만 쓰는 프로세스는 테이블이 실제로 몇 KB면 된다. 512GB → 수 KB.</li>
+</ul>
+<p class="note">9×4 + 12 = 48비트. 이것이 x64가 실제로 48비트 주소만 쓰는 이유다(총 256TB = 유저 128TB + 커널 128TB). 최신 CPU는 5단계(57비트)까지 확장 가능하다. <a href="https://pages.cs.wisc.edu/~remzi/OSTEP/vm-smalltables.pdf">OSTEP 20장</a></p>
+
+<h2>4. 대가와 해결책 — TLB</h2>
+<p>4단계 트리에는 대가가 있다. 주소 하나를 번역하려면 <strong>메모리를 4번 읽어야 한다</strong>(각 단계 테이블을). 그리고 그 4번을 <em>모든 메모리 접근마다</em> 한다면?</p>
+<p><code>players[3172].chHP</code>를 한 번 읽는 데 메모리 접근 5번(번역 4 + 실제 1). <strong>5배 느려진다.</strong> 이대로면 가상 메모리는 못 쓸 물건이다.</p>
+<p>그래서 CPU 안에 <strong>TLB</strong>(Translation Lookaside Buffer)가 있다 — "최근에 번역한 페이지 번호 → 프레임 번호" 결과를 담는 <strong>작고 아주 빠른 캐시</strong>(보통 수십~수천 개 엔트리).</p>
+<ul>
+<li><strong>TLB 히트</strong>: 번역이 사실상 공짜(1사이클 수준). 대부분의 접근이 여기 해당.</li>
+<li><strong>TLB 미스</strong>: 그때만 4단계를 실제로 걷는다(page table walk).</li>
+</ul>
+
+<div class="box">
+<div class="box-title">이것이 레슨 7(캐시)과 이어지는 지점</div>
+TLB는 <strong>페이지 단위의 지역성</strong>에 의존한다. 한 페이지(4KB) 안을 계속 훑으면 번역 결과 하나로 4096바이트를 다 커버한다 → TLB 히트.<br>
+반대로 <strong>여기저기 흩어진 주소를 점프</strong>하면 매번 다른 페이지 → TLB 미스 폭발.<br>
+<em>파생 3-1에서 "프리 리스트를 따라가는 건 캐시 미스가 잦다"고 한 것</em>이 정확히 이 이야기다. 링버퍼가 연속된 메모리인 것, 섹터가 <code>list</code>를 버리고 <code>vector</code>를 택한 것(레슨 7) — 전부 TLB와 캐시를 위한 선택이다.
+</div>
+
+<h2>5. 전체 그림 — 한 번의 메모리 접근에서 벌어지는 일</h2>
+<pre><code>players[3172].chHP 를 읽는다
+   ↓
+① 가상 주소 계산 (base + 48 × 3172 + 오프셋)   ← 레슨 2에서 배운 그것
+   ↓
+② 주소를 쪼갠다: 상위 36비트=페이지번호, 하위 12비트=오프셋
+   ↓
+③ TLB에 페이지번호가 있나?
+     있음 → 프레임번호 즉시 획득 (거의 공짜)
+     없음 → 4단계 페이지 테이블 walk (메모리 4번 읽기) → TLB에 저장
+   ↓
+④ PTE의 권한 비트 검사 (Present? R/W? U/S? NX?)
+     위반 → 폴트 → 크래시(0xC0000005) 또는 커널이 처리
+   ↓
+⑤ 물리 주소 = 프레임번호 + (통과한) 오프셋
+   ↓
+⑥ 그 물리 주소를 CPU 캐시에서 찾는다 (여기서부터 레슨 7)</code></pre>
+
+<h2>6. 드릴 (답은 접기)</h2>
+<pre><code>D1. 가상 주소 0x00007FF6A0009ABC 에서 오프셋은? 가상 페이지 번호는?
+D2. 같은 페이지 안의 두 변수를 번갈아 읽는다. TLB 미스는 몇 번?
+D3. 페이지 테이블을 평평하게(1단계) 만들면 왜 실용적이지 않은가 — 숫자로.</code></pre>
+<details class="faq"><summary>답 확인 (먼저 스스로)</summary><div class="faq-a">
+<p><strong>D1</strong>: 오프셋 = 하위 12비트 = 16진수 마지막 3자리 = <code>0xABC</code>. 가상 페이지 번호 = 나머지 = <code>0x7FF6A0009</code>.<br>
+<strong>D2</strong>: 첫 접근에서 <strong>1번</strong>(콜드 미스), 그 뒤로는 0번. 같은 페이지면 번역 결과가 같으므로 TLB 엔트리 하나를 계속 재사용한다. — <em>이것이 "연속 메모리를 순차 접근하라"의 근거다.</em><br>
+<strong>D3</strong>: 페이지 번호 36비트 → 2<sup>36</sup>칸 × 8바이트 = <strong>512GB</strong>, 그것도 프로세스마다. 실제 사용량은 수 MB인데 표가 512GB인 건 말이 안 된다. 4단계 트리는 안 쓰는 가지를 생략해 수 KB로 줄인다.</p>
+</div></details>
+
+<h2>7. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>주 자료 (필독)</h2>
+<ul>
+<li><a href="https://pages.cs.wisc.edu/~remzi/OSTEP/vm-paging.pdf">OSTEP 18장 — Paging: Introduction</a> — 페이지 번호/오프셋 분할의 표준 설명.</li>
+<li><a href="https://pages.cs.wisc.edu/~remzi/OSTEP/vm-tlbs.pdf">OSTEP 19장 — Paging: Faster Translations (TLBs)</a> — TLB가 왜 필요한지 수치로.</li>
+<li><a href="https://pages.cs.wisc.edu/~remzi/OSTEP/vm-smalltables.pdf">OSTEP 20장 — Smaller Tables</a> — 다단계 페이지 테이블이 나오는 과정.</li>
+<li>참고: <a href="https://learn.microsoft.com/en-us/windows-hardware/drivers/gettingstarted/virtual-address-spaces">Microsoft Learn — Virtual Address Spaces</a> (Windows의 유저/커널 분할).</li>
+</ul>
+
+<div class="lesson-footer">
+부모 레슨: <a href="0006-virtual-memory.html">레슨 6 — 가상 메모리</a> · 관련: <a href="0003-1-why-heap-allocation-is-expensive.html">3-1 힙 할당 비용</a> · <a href="0007-cpu-cache.html">레슨 7 CPU 캐시</a> → · <a href="index.html">코스 홈</a><br>
+이 문서는 사용자의 지적("가상 메모리에 뭔가 빠진 것 같다")에서 태어났다. 레슨이 <em>무엇</em>만 말하고 <em>어떻게</em>를 건너뛴 것을 감지한 것 — 그런 감지가 이 코스를 좋게 만든다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: '가상→물리 번역에서 주소의 하위 12비트(오프셋)는 어떻게 되나?',
+  options: ['번역되지 않고 그대로 물리 주소에 쓰인다', '페이지 테이블을 거쳐 함께 번역된다', 'TLB가 캐시해 둔 값으로 교체된다'],
+  answer: 0,
+  explain: '번역이 바꾸는 건 페이지 번호뿐이다. 오프셋은 "페이지 안에서 몇 번째 바이트"라 가상이든 물리든 같으므로 손대지 않고 통과한다. 그래서 16진수 마지막 3자리는 번역 전후가 동일하다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'nullptr 역참조와 코드 영역 덮어쓰기가 둘 다 막히는 공통 메커니즘은?',
+  options: ['컴파일러가 넣어준 런타임 검사 코드가 잡는다', '페이지 테이블 엔트리의 권한 비트를 CPU가 검사', 'OS가 주기적으로 메모리를 스캔해서 잡아낸다'],
+  answer: 1,
+  explain: '둘 다 PTE의 비트 문제다. nullptr은 Present=0(매핑 안 됨), 코드 영역은 R/W=0(쓰기 금지). CPU가 매 접근마다 하드웨어로 검사하므로 공짜다 — 소프트웨어 검사도, 주기적 스캔도 아니다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: '페이지 테이블을 4단계 트리로 만드는 가장 큰 이유는?',
+  options: ['안 쓰는 주소 영역의 표를 아예 만들지 않으려고', '번역 속도를 4배 빠르게 만들 수 있기 때문에', '프로세스끼리 표를 나눠 공유하기 위해서다'],
+  answer: 0,
+  explain: '평평한 표는 프로세스당 512GB가 필요하다(2^36 × 8바이트). 트리는 실제로 쓰는 가지만 만들어 수 KB로 줄인다. 속도는 오히려 나빠져서(메모리 4번 읽기) TLB로 따로 메운다.'
+});
+</script>

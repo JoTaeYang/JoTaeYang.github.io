@@ -1,0 +1,56 @@
+<title>참조: FighterServer 코드베이스 지도</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Reference · 코드베이스 지도</div>
+<h1>FighterServer 코드베이스 지도</h1>
+<p class="lede">이 저장소가 우리의 교재다. 모든 레슨은 여기 있는 실제 코드로 되돌아온다.</p>
+
+<h2>전체 구조</h2>
+<table>
+<tr><th>디렉터리</th><th>역할</th></tr>
+<tr><td><code>NetLib/</code></td><td>IOCP 네트워크 엔진 + 락프리 컨테이너 (정적 라이브러리, C++14, x64 전용)</td></tr>
+<tr><td><code>FighterServer/</code></td><td>게임 서버 실행 파일 — <code>CServer</code>를 상속해 게임 로직 구현</td></tr>
+<tr><td><code>Tests/</code></td><td>락프리 풀/스택/큐 멀티스레드 스트레스 테스트</td></tr>
+<tr><td><code>Bench/</code></td><td>C++ vs Go vs C# 벤치마크 (RESULTS.md에 분석 기록)</td></tr>
+<tr><td><code>GoFighter/</code>, <code>CsFighter/</code></td><td>같은 서버의 Go / C# 포트 — 언어별 설계 비교용</td></tr>
+</table>
+
+<h2>NetLib 핵심 파일</h2>
+<table>
+<tr><th>파일</th><th>줄수</th><th>역할</th></tr>
+<tr><td><code>CServer.cpp</code></td><td>798</td><td>엔진 본체. Accept 스레드 1 + IOCP 워커 N + GameThread(5ms 틱) + SendThread(2ms 틱)</td></tr>
+<tr><td><code>stSESSION.h</code></td><td>75</td><td>세션 상태: 링버퍼, 락프리 SendQ, <code>lIOCount</code> 참조카운트, <code>lSendFlag</code> 3상태 클레임</td></tr>
+<tr><td><code>CRingBuffer.cpp</code></td><td>323</td><td>8192바이트 SPSC 링버퍼 — 2세그먼트 WSABUF 스캐터 수신</td></tr>
+<tr><td><code>CMessageBuffer.cpp</code></td><td>423</td><td>직렬화 버퍼: <code>&lt;&lt;</code>/<code>&gt;&gt;</code> 연산자, 헤더 프레이밍, 참조카운트, 풀링, 경계 검사</td></tr>
+<tr><td><code>CMemoryPool.h</code></td><td>235</td><td>락프리 프리리스트 풀 — 128비트 CAS(DCAS) + ABA 방지 unique 카운터</td></tr>
+<tr><td><code>CLockFreeStack.h</code></td><td>159</td><td>Treiber 스택 (세션 인덱스 프리리스트)</td></tr>
+<tr><td><code>CLockFreeQueue.h</code></td><td>274</td><td>MS 큐 + <code>PeekBulk</code> 벌크 읽기</td></tr>
+<tr><td><code>CCrashDump.cpp</code>, <code>ProfileTLS.cpp</code></td><td>—</td><td>풀메모리 미니덤프 / TLS 샘플링 프로파일러</td></tr>
+</table>
+
+<h2>사용하는 Windows API</h2>
+<p><code>CreateIoCompletionPort</code>, <code>GetQueuedCompletionStatus</code>, <code>PostQueuedCompletionStatus</code>, overlapped <code>WSARecv</code>/<code>WSASend</code>, <code>_beginthreadex</code>, <code>timeBeginPeriod(1)</code>, <code>InterlockedCompareExchange128</code>, <code>MiniDumpWriteDump</code>. 뮤텍스/SRWLock 없음 — 의도적으로 전부 락프리.</p>
+
+<h2>패킷 생애주기 (외워야 할 흐름)</h2>
+<ol>
+<li><strong>WSARecv 완료</strong> → 워커 스레드가 <code>RecvMsgDiv</code>에서 링버퍼로부터 패킷 재조립, 코드(0x89)·길이(≤4096) 검증</li>
+<li>완성된 패킷을 <code>completeRecvQ</code>에 넣고 <code>NotifyRecv</code></li>
+<li><strong>GameThread</strong>가 5ms 틱마다 드레인(세션당 ≤2000개) → <code>OnRecv</code> → <code>PacketProc_*</code> 핸들러가 게임 상태 변경 + 섹터 브로드캐스트</li>
+<li><code>SendPacket</code>: AddRef + SendQ 인큐 + <code>NotifySend</code></li>
+<li><strong>SendThread</strong>가 2ms 틱마다 최대 100버퍼를 하나의 <code>WSASend</code>로 배칭 → 완료 시 <code>SendUpdate</code>가 DecRef</li>
+</ol>
+
+<h2>게임 프로토콜 (Protocol.h)</h2>
+<p>4바이트 헤더 <code>{ BYTE byCode=0x89; WORD wSize; BYTE byType; }</code> (v2에서 길이를 BYTE→WORD로 확장, 최대 페이로드 4096). 8방향 이동, 33×43 섹터 기반 관심영역 관리. 캐릭터 생성/삭제/이동/공격1-3/데미지/SYNC/에코.</p>
+
+<h2>가르칠 가치가 있는 기법 목록</h2>
+<ul>
+<li>락 없는 세션 수명 관리: <code>lIOCount</code> + <code>lSendFlag</code>(0/1/2) + 세션 Key = 17비트 인덱스 + 47비트 unique</li>
+<li>좀비 커넥션 타임아웃 (30초 idle 스윕)</li>
+<li>프로토콜 방어: 코드/길이 검증, 직렬화 경계 검사 → 즉시 연결 해제</li>
+<li>DCAS + unique 태그로 ABA 문제 방지</li>
+<li>섹터를 <code>std::list</code>→<code>std::vector</code>로 바꾼 캐시 지역성 개선 + swap-remove</li>
+</ul>
+
+<div class="lesson-footer">이 문서는 레슨이 진행되며 갱신된다. 원본 분석: 2026-07-06.</div>
+</main>

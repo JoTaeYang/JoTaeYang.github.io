@@ -1,0 +1,130 @@
+<title>레슨 4 — 값, 포인터, 참조: 함수에 무엇을 넘길 것인가</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0004 · C++ 기본기 · 함수와 전달 방식</div>
+<h1>값, 포인터, 참조: 함수에 무엇을 넘길 것인가</h1>
+<p class="lede">함수 인자를 넘기는 방법은 세 가지뿐이다 — 복사해서(값), 주소를 넘겨서(포인터), 별명을 붙여서(참조). 오늘의 목표: 이 서버의 함수 시그니처들을 보고 <em>왜 그 방식을 골랐는지</em> 읽어낼 수 있게 된다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+함수 시그니처는 설계 의도의 압축이다. <code>SendPacket(SessionID, CMessageBuffer* packet)</code>이 포인터를 받는 것, <code>GetSectorArounds(..., st_SECTOR_AROUND* out)</code>이 결과를 인자로 돌려주는 것, <code>CompareXY(short, short)</code>가 태연히 복사를 받는 것 — 각각 이유가 있다. 이걸 읽는 눈이 생기면 남의 코드가 문서처럼 읽힌다.
+</div>
+
+<h2>1. 지식 — 세 가지 전달 방식</h2>
+
+<h3>값 전달(pass by value): 복사본을 준다</h3>
+<p><a href="../FighterServer/CCharacter.cpp">CCharacter.cpp:25</a>:</p>
+<pre><code>bool CCharacter::CompareXY(short shX, short shY)   // short 2개를 복사</code></pre>
+<p>호출자의 변수가 스택 프레임(레슨 3)에 <strong>복사</strong>된다. 함수 안에서 뭘 해도 원본은 무사하다. short는 2바이트 — 복사가 주소 전달(8바이트)보다 오히려 싸다. <strong>작은 것(대략 16바이트 이하)은 값으로 넘기는 게 정답</strong>이다.</p>
+
+<h3>포인터 전달: 주소를 준다</h3>
+<p><a href="../FighterServer/CFighterServer.cpp">SendAround 안</a>:</p>
+<pre><code>sectors-&gt;GetSectorArounds(px, py, &amp;around);   // around의 주소를 넘긴다</code></pre>
+<p>함수가 그 주소를 따라가 <strong>호출자의 변수를 직접 채워 준다</strong> — 출력 인자(out parameter) 패턴이다. 반환값 대신 이렇게 쓰는 이유: <code>st_SECTOR_AROUND</code>는 44바이트라 반환-복사가 아깝고(C++14 감각), 호출자가 스택에 만들어 둔 것을 채우기만 하면 힙 할당도 필요 없다.</p>
+<p>또 하나, <code>SendPacket(SessionID, CMessageBuffer* packet)</code>처럼 <strong>크고 공유되는 객체</strong>는 반드시 주소로 넘긴다. 패킷 버퍼를 복사해서 넘긴다면 브로드캐스트 한 번에 수십 번의 버퍼 복사가 일어났을 것이다.</p>
+
+<h3>참조 전달(pass by reference): 별명을 준다</h3>
+<pre><code>void Damage(CCharacter&amp; target) { target.chHP -= 10; }   // target은 원본의 별명
+...
+Damage(players[index]);   // & 없이 그냥 넘긴다 — 호출부가 깔끔</code></pre>
+<p>참조는 "이미 있는 객체에 붙인 두 번째 이름"이다. 포인터와 능력은 같지만 계약이 강하다: <strong>null일 수 없고, 다른 대상으로 갈아탈 수 없으며, 역참조 문법(<code>-&gt;</code>, <code>*</code>)이 필요 없다</strong>. 이 코드베이스는 전통적 스타일이라 포인터를 주로 쓰지만, 범위 기반 for의 <code>for (CCharacter* pOther : ...)</code>를 현대식으로 다듬으면 참조가 자연스럽다. <a href="https://www.learncpp.com/cpp-tutorial/lvalue-references/">learncpp: Lvalue references</a></p>
+
+<h3>const: "읽기만 하겠다"는 약속</h3>
+<pre><code>bool OnConnectionRequest(const WCHAR* cwIP, unsigned short sPort);   // CServer.h:44</code></pre>
+<p><code>const WCHAR*</code>는 "주소는 받되, 가리키는 내용은 절대 안 고친다"는 컴파일러가 강제하는 계약이다. 큰 객체를 복사 없이 넘기면서 원본 훼손도 막고 싶다면 <code>const T&amp;</code> — 현대 C++에서 가장 흔한 인자 형태다.</p>
+<p class="note">그런데 <code>const</code>의 <strong>위치</strong>가 바뀌면(<code>WCHAR* const</code>, <code>const WCHAR* const</code>) 의미가 달라진다. "무엇이 불변인가 — 대상인가 포인터인가"를 읽는 규칙은 파생 문서 <a href="0004-1-const-positions.html">4-1: const의 위치가 바꾸는 것</a>에서 다룬다.</p>
+
+<h3>선택 규칙 (외울 것)</h3>
+<table>
+<tr><th>상황</th><th>선택</th><th>이 서버의 예</th></tr>
+<tr><td>작다 (≤16바이트)</td><td>값</td><td><code>CompareXY(short, short)</code>, <code>SessionID</code>(8바이트)</td></tr>
+<tr><td>크다 + 읽기만</td><td><code>const T&amp;</code> (또는 const 포인터)</td><td><code>const WCHAR* cwIP</code></td></tr>
+<tr><td>함수가 원본을 고쳐야 함</td><td><code>T&amp;</code> 또는 <code>T*</code></td><td><code>GetSectorArounds(..., &amp;around)</code></td></tr>
+<tr><td>"없음"이 유효한 입력</td><td><code>T*</code> (nullptr 허용)</td><td><code>SendOneSector(..., CCharacter* pCharacter = nullptr)</code></td></tr>
+</table>
+<p>마지막 줄이 포인터 vs 참조의 결정타다: <a href="../FighterServer/CFighterServer.h">CFighterServer.h:64</a>의 <code>SendOneSector</code>는 "제외할 캐릭터 없음"을 nullptr로 표현해야 하므로 참조로는 쓸 수 없다.</p>
+
+<h2>2. 스킬 — 복사인가 원본인가, 예측하고 확인하라</h2>
+<p><code>scratch\passing_check.cpp</code> — 실행 <em>전에</em> 출력 4줄을 종이에 먼저 적어라:</p>
+<pre><code>#include &lt;cstdio&gt;
+
+void byValue(int x)      { x = 100; }
+void byPointer(int* x)   { *x = 200; }
+void byReference(int&amp; x) { x = 300; }
+
+int main() {
+    int a = 1, b = 1, c = 1;
+    byValue(a);      printf("byValue:     a = %d\n", a);
+    byPointer(&amp;b);   printf("byPointer:   b = %d\n", b);
+    byReference(c);  printf("byReference: c = %d\n", c);
+
+    // 참조는 별명일 뿐, 새 객체가 아니다:
+    int&amp; alias = c;
+    printf("같은 주소인가: %d\n", &amp;alias == &amp;c);
+}</code></pre>
+<pre><code>cl /EHsc /nologo passing_check.cpp &amp;&amp; passing_check.exe</code></pre>
+<p>예측: a=1(복사만 바뀜), b=200, c=300, 같은 주소=1. 하나라도 틀렸다면 그 줄을 다시 파라.</p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>참조가 결국 포인터라면 왜 두 개나 있나요?</summary><div class="faq-a">
+<p>기계 수준에서는 대부분 같은 코드(주소 전달)로 컴파일된다. 차이는 <strong>사람에게 강제되는 계약</strong>이다. 참조는 태어날 때 반드시 대상이 있어야 하고 평생 못 바꾼다 — 그래서 "null 검사 필요 없음"이 문법으로 보장된다. 포인터는 자유로운 대신 매번 의심해야 한다. "제약이 강한 도구가 기본, 자유로운 도구는 필요할 때만"이 현대 C++의 방향이다.</p>
+</div></details>
+
+<details class="faq"><summary>SessionID는 8바이트 __int64인데 왜 포인터로 안 넘기죠?</summary><div class="faq-a">
+<p>8바이트 값을 복사하는 비용과 8바이트 주소를 복사하는 비용이 <em>완전히 같기</em> 때문이다. 게다가 포인터로 넘기면 받는 쪽이 역참조를 한 번 더 해야 해서 오히려 느리다. "작으면 값으로"의 전형적 사례. 이 서버 전체에서 SessionID가 항상 값으로 다니는 이유다.</p>
+</div></details>
+
+<details class="faq"><summary>함수가 끝나면 스택 프레임이 사라진다면서요. 그럼 지역 변수의 주소를 반환하면요?</summary><div class="faq-a">
+<p>최악의 버그 중 하나다. 반환된 주소는 이미 걷힌 스택 자리를 가리키고(댕글링), 다음 함수 호출이 그 자리를 덮어쓰는 순간 값이 소리 없이 오염된다. 컴파일러가 경고(C4172)를 주니 절대 무시하지 말 것. GetSectorArounds가 "호출자가 만든 스택 변수를 채워주는" 방향으로 설계된 것도 이 함정을 피하는 정석 패턴이다.</p>
+</div></details>
+
+<details class="faq"><summary>const를 붙였는데 함수 안에서 고치려 하면 어떻게 되나요?</summary><div class="faq-a">
+<p>컴파일 에러다 — 실행조차 되기 전에 잡힌다. 이것이 const의 가치다: 수명 버그(레슨 3)는 실행해야 터지지만 const 위반은 빌드 시점에 공짜로 잡힌다. 그래서 "고칠 일 없는 인자에는 일단 const"가 습관이 되어야 한다. 컴파일러를 교정 장치로 쓰는 것이다.</p>
+</div></details>
+
+<details class="faq"><summary>st_SECTOR_AROUND를 그냥 return하면 44바이트 복사가 일어난다고요? 요즘도요?</summary><div class="faq-a">
+<p>사실 현대 컴파일러는 RVO(반환값 최적화)로 복사를 제거하는 경우가 많고, C++17부터는 일부가 의무화됐다. 그래서 현대식이라면 <code>return around;</code>도 충분히 좋은 선택이다. 이 코드가 출력 인자를 쓰는 것은 C++03 시절부터 내려온 게임서버 관례 + "복사가 없음을 눈으로 보장"하려는 보수적 스타일이다. 두 방식 다 읽을 줄 알면 된다.</p>
+</div></details>
+
+<details class="faq"><summary>배열을 함수에 넘기면 통째로 복사되나요?</summary><div class="faq-a">
+<p>안 된다. 배열 이름은 함수에 넘기는 순간 첫 원소의 포인터로 붕괴(decay)한다 — 그래서 배열을 받는 함수는 크기를 따로 받아야 한다(<code>Start(..., uiMaxSession)</code>처럼). C 배열의 대표적 함정이고, 현대 C++이 <code>std::vector</code>·<code>std::array</code>(크기를 스스로 아는 타입)를 권하는 이유다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://www.learncpp.com/cpp-tutorial/pass-by-lvalue-reference/">learncpp — Pass by lvalue reference</a> 및 이어지는 pass by address 챕터. 참고: <a href="https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Rf-conventional">Core Guidelines F.15–F.17 (인자 전달 규칙)</a>.</li>
+</ul>
+
+<div class="lesson-footer">
+← <a href="0003-stack-heap-lifetime.html">레슨 3: 스택, 힙, 수명</a> · <a href="0005-inheritance-virtual.html">레슨 5: 상속과 virtual</a> → · <a href="../reference/codebase-map.html">코드베이스 지도</a><br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0004-1, 0004-2…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: 'SendOneSector의 제외 대상 인자가 참조가 아니라 CCharacter* 포인터인 이유는?',
+  options: ['"제외 없음"을 nullptr로 표현해야 해서', '포인터가 참조보다 전달 속도가 빨라서', '참조는 클래스 타입에 쓸 수가 없어서'],
+  answer: 0,
+  explain: '참조는 반드시 대상이 있어야 한다. "없을 수도 있는 인자"는 포인터(+nullptr 기본값)의 영역이다. 속도는 동일하고, 참조는 클래스 타입에도 당연히 쓸 수 있다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'void f(CCharacter c)처럼 48바이트 객체를 값으로 받으면 일어나는 일은?',
+  options: ['호출마다 48바이트 복사본이 생긴다', '컴파일러가 자동으로 참조로 바꿔준다', '원본 객체가 함수 안에서 수정이 된다'],
+  answer: 0,
+  explain: '값 전달은 항상 복사다. 컴파일러가 몰래 참조로 바꿔주지 않으며(의미가 달라지므로), 복사본을 고쳐도 원본은 무사하다. 크고 자주 부르는 함수라면 const T&로 바꿔야 한다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: 'GetSectorArounds(px, py, &around)에서 &의 역할은?',
+  options: ['around의 주소를 만들어 넘기는 연산자', 'around를 참조 타입으로 선언하는 문법', '주소가 잘못됐을 때 검사하는 안전장치'],
+  answer: 0,
+  explain: '식에서의 &는 "주소 얻기" 연산자다(레슨 2). 선언에서의 &(참조)와 기호만 같고 역할이 다르다. 함수는 이 주소를 따라가 호출자의 around를 직접 채운다.'
+});
+</script>

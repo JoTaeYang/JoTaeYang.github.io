@@ -1,0 +1,140 @@
+<title>레슨 17 — 복사와 Rule of Three: 얕은 복사의 함정</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0017 · C++ 심화 · 클래스 설계</div>
+<h1>복사와 Rule of Three: 얕은 복사의 함정</h1>
+<p class="lede">C++은 묻지도 않고 클래스에 복사 능력을 넣어준다. 자원을 소유한 클래스에게 그 선물은 폭탄이다. 오늘의 목표: <code>CMessageBuffer</code>가 <em>왜 복사되면 안 되는지</em>를 이중 해제 실험으로 증명하고, 세 가지 대응(깊은 복사·복사 금지·공유)을 구별한다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+<a href="../NetLib/CMessageBuffer.h">CMessageBuffer</a>는 힙 버퍼(<code>m_chBuffer</code>)를 소유하고, 참조 카운트(<code>m_lRefCnt</code>)로 수명을 관리하며, 메모리 풀에서 태어난다. 이 셋 중 어느 것도 "그냥 바이트 복사"로 복제되면 안 된다. 실수로 한 번 복사되는 순간 이중 해제·카운트 붕괴가 터진다 — 레슨 3(수명)의 이론이 실제 클래스에서 폭발하는 지점이다.
+</div>
+
+<h2>1. 지식 — 컴파일러가 몰래 만드는 것들</h2>
+
+<h3>선물 세트: 복사 생성자와 복사 대입 연산자</h3>
+<p>클래스를 만들면 컴파일러가 자동으로 넣어주는 함수들이 있다. 그중 둘이 오늘의 주인공이다:</p>
+<pre><code>class Buf {
+    unsigned char* data;
+public:
+    // ↓ 이 둘을 안 쓰면 컴파일러가 자동 생성한다 (멤버를 그대로 복사)
+    Buf(const Buf&amp; other);              // 복사 생성자:  Buf b = a;
+    Buf&amp; operator=(const Buf&amp; other);   // 복사 대입:     b = a;
+};</code></pre>
+<p>자동 생성판이 하는 일: <strong>멤버를 하나씩 그대로 복사</strong>한다(memberwise copy). int면 int를 복사, 포인터면 <em>포인터 값(주소)을</em> 복사. 여기서 재앙이 시작된다.</p>
+
+<h3>얕은 복사(shallow) vs 깊은 복사(deep)</h3>
+<pre><code>Buf a;              // a.data → [힙의 버퍼 X]
+Buf b = a;          // 자동 복사: b.data = a.data  → b.data도 [X]를 가리킨다!
+</code></pre>
+<p>자동 복사는 <strong>얕다</strong>: 주소만 베껴서 두 객체가 <em>같은 힙 버퍼 X</em>를 가리킨다. 그러면:</p>
+<ul>
+<li><strong>이중 해제</strong>: a와 b가 각자 소멸하며 둘 다 <code>delete[] data</code> → X를 두 번 해제 → 힙 파괴(레슨 3).</li>
+<li><strong>공유 오염</strong>: b를 통해 버퍼를 고치면 a가 본 데이터도 바뀐다(의도치 않은 별칭).</li>
+</ul>
+<p><strong>깊은 복사</strong>는 새 버퍼를 할당해 <em>내용을</em> 복사한다(<code>b.data = new[...]; memcpy</code>). 두 객체가 독립적이 된다. std::vector·std::string이 하는 게 이것이다.</p>
+
+<h3>Rule of Three — 셋은 한 세트다</h3>
+<p><strong>소멸자, 복사 생성자, 복사 대입 중 하나라도 직접 써야 한다면, 셋 다 써야 한다.</strong> 이유: 소멸자에서 <code>delete[]</code>를 한다는 건 "이 클래스가 자원을 소유한다"는 뜻이고, 그러면 자동 얕은 복사는 반드시 이중 해제를 부르기 때문이다. <a href="https://en.cppreference.com/w/cpp/language/rule_of_three">cppreference: Rule of three</a></p>
+
+<h3>그런데 CMessageBuffer는 더 나아간다 — 복사가 아니라 "공유"</h3>
+<p>CMessageBuffer의 진짜 요구는 "복제"가 아니다. 브로드캐스트 때 <em>하나의 버퍼를 여러 세션이 함께 쓰는 것</em>(레슨 9 질문 세트)이다. 그래서 깊은 복사도 답이 아니다 — 30명에게 보낼 때 30벌을 만드는 낭비가 되니까. 답은 <strong>참조 카운트 공유</strong>다:</p>
+<pre><code>int CMessageBuffer::AddRef();   // 드는 사람이 하나 늘 때 카운트++
+void CMessageBuffer::DecRef();  // 다 쓴 사람이 카운트--, 0이면 풀에 반납</code></pre>
+<p>이 모델에서 <strong>얕은 복사는 치명적이다</strong>: 카운트를 안 올리고 포인터만 베끼면, 실제로 두 명이 드는데 카운트는 한 명이라 믿는다 → 첫 DecRef에서 0이 되어 풀에 반납 → 두 번째 사용자는 이미 반납된(다른 패킷으로 재사용 중인) 버퍼를 밟는다. 그래서 CMessageBuffer는 <strong>복사를 아예 막고</strong>, 공유는 오직 <code>AddRef</code>/<code>DecRef</code>로만 하게 설계됐다. "복사 금지"도 Rule of Three의 정당한 한 형태다:</p>
+<pre><code>// 현대 C++의 명시적 복사 금지 (이 코드베이스는 C++14 관례상 private 선언 등으로 처리)
+CMessageBuffer(const CMessageBuffer&amp;) = delete;
+CMessageBuffer&amp; operator=(const CMessageBuffer&amp;) = delete;</code></pre>
+<p>정리하면 자원 소유 클래스의 세 갈래 선택지: <strong>① 깊은 복사</strong>(독립 복제가 맞을 때 — vector/string), <strong>② 복사 금지 + 공유</strong>(하나를 여럿이 들 때 — CMessageBuffer), <strong>③ 복사 금지, 그냥 유일 소유</strong>(복제도 공유도 불필요할 때). 무엇을 고를지는 "이 자원의 수명을 몇 명이 어떻게 나눠 갖는가"가 결정한다.</p>
+
+<h2>2. 스킬 — 이중 해제를 직접 터뜨리기</h2>
+<p><code>scratch\copy_check.cpp</code> — 얕은 복사의 폭발을 재현한다:</p>
+<pre><code>#include &lt;cstdio&gt;
+#include &lt;cstring&gt;
+
+struct Buf {
+    char* data;
+    Buf(const char* s) { data = new char[32]; strcpy(data, s);
+                         printf("  생성: data=%p\n", (void*)data); }
+    ~Buf() { printf("  소멸: delete %p\n", (void*)data); delete[] data; }
+    // 복사 생성자/대입을 "일부러 안 만든다" → 컴파일러의 얕은 복사가 들어온다
+};
+
+void boom() {
+    Buf a("hello");
+    Buf b = a;               // 얕은 복사! b.data == a.data (같은 주소)
+    printf("a.data=%p  b.data=%p  같은가:%d\n",
+           (void*)a.data, (void*)b.data, a.data == b.data);
+}   // 여기서 b 소멸(delete X), 이어서 a 소멸(delete X 또!) → 이중 해제
+
+int main() {
+    printf("[얕은 복사 버전] 같은 주소를 두 번 delete:\n");
+    boom();    // 크래시하거나, 힙 손상 경고가 뜬다 (Debug 빌드에서 잘 보임)
+    printf("돌아왔다면 운이 좋았을 뿐 — UB다.\n");
+}</code></pre>
+<pre><code>cl /EHsc /nologo copy_check.cpp &amp;&amp; copy_check.exe</code></pre>
+<p>관찰: "소멸: delete X"가 <strong>같은 주소로 두 번</strong> 찍힌다. 이것이 이중 해제다. <strong>도전 1</strong>: 깊은 복사 생성자(<code>Buf(const Buf&amp; o){ data=new char[32]; strcpy(data,o.data); }</code>)를 추가하면 두 주소가 달라지고 이중 해제가 사라지는 것을 확인하라. <strong>도전 2</strong>: 대신 복사를 <code>= delete</code>로 막으면 <code>Buf b = a;</code> 줄에서 <em>컴파일 자체가 실패</em>하는 것을 확인하라 — CMessageBuffer가 택한 길이다.</p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>Buf b = a; 랑 b = a; 는 같은 건가요?</summary><div class="faq-a">
+<p>다르다. <code>Buf b = a;</code>는 b가 <em>태어나면서</em> a를 본떠 만들어지는 것 → <strong>복사 생성자</strong>. <code>b = a;</code>는 이미 살아있는 b에 a를 <em>덮어쓰는</em> 것 → <strong>복사 대입 연산자</strong>. 대입은 더 까다롭다: b가 원래 들고 있던 자원을 먼저 해제해야 하고(안 하면 누수), 자기 자신에게 대입(<code>b = b</code>)하는 경우도 견뎌야 한다. Rule of Three가 셋을 묶는 이유다.</p>
+</div></details>
+
+<details class="faq"><summary>레슨 1의 CCharacter는 왜 이런 문제가 없었나요?</summary><div class="faq-a">
+<p>CCharacter는 <strong>자원을 소유하지 않기 때문</strong>이다 — 멤버가 전부 값 타입(int, short, char)이라 얕은 복사가 곧 완전한 복사다. SessionKey를 복사해도 아무것도 공유되지 않는다. 그래서 CCharacter는 소멸자도, 복사 함수도 필요 없다(Rule of Three가 발동 안 함). <strong>포인터로 힙 자원을 소유하는 순간</strong>부터 Rule of Three가 작동한다 — 그 경계를 아는 게 이 레슨의 핵심이다.</p>
+</div></details>
+
+<details class="faq"><summary>함수에 객체를 값으로 넘기면(레슨 4) 복사 생성자가 불리나요?</summary><div class="faq-a">
+<p>그렇다! <code>void f(Buf x)</code>를 호출하면 인자를 만들며 복사 생성자가 돈다. 그래서 얕은 복사 클래스를 무심코 값 전달하면 함수가 끝날 때 x가 소멸하며 원본의 버퍼를 delete해 버린다 — 원본이 댕글링된다. 레슨 4에서 "크면 const 참조로"라 한 이유가 성능만이 아니었던 것이다. 복사 금지(=delete)로 막아두면 이런 실수가 컴파일 에러로 잡힌다 — 또 하나의 "컴파일러를 방어선으로"다.</p>
+</div></details>
+
+<details class="faq"><summary>깊은 복사와 참조 카운트 공유 중 뭘 골라야 할지 어떻게 판단하죠?</summary><div class="faq-a">
+<p>질문 하나로 갈린다: <strong>"복제본들이 서로 독립이어야 하나, 아니면 같은 하나를 나눠 보는 건가?"</strong> 각자 고쳐도 남에게 영향 없어야 하면 깊은 복사(vector 원소들처럼). 하나의 데이터를 여러 곳이 함께 읽고 마지막이 정리하면 되면 공유(브로드캐스트 패킷처럼). CMessageBuffer는 "같은 이동 패킷을 30명이 읽는다"라 공유가 정답이고, 깊은 복사면 30벌 낭비다. 데이터의 의미가 자료구조를 정한다(레슨 16 마지막 질문과 같은 교훈).</p>
+</div></details>
+
+<details class="faq"><summary>참조 카운트가 그냥 int가 아니라 volatile LONG인 이유는요?</summary><div class="faq-a">
+<p>여러 스레드가 동시에 AddRef/DecRef하기 때문이다(워커·GameThread·SendThread). 평범한 <code>count++</code>는 "읽고-더하고-쓰는" 세 단계라, 두 스레드가 겹치면 한 번의 증가가 사라진다(레슨 예고: 경쟁 조건). 그래서 <code>InterlockedIncrement</code> 같은 원자 연산으로 해야 하고, <code>volatile</code>은 컴파일러가 그 값을 레지스터에 캐싱하지 못하게 막는다. <strong>이 한 필드가 멀티스레드 아크(기둥 E) 전체의 예고편이다</strong> — 지금은 "공유 카운트는 원자적이어야 한다"까지만.</p>
+</div></details>
+
+<details class="faq"><summary>= delete는 언제부터 쓸 수 있었나요? 이 코드는 왜 안 쓰죠?</summary><div class="faq-a">
+<p><code>= delete</code>는 C++11부터다. 이 코드베이스는 C++14지만 게임서버 업계의 오래된 관례로 "복사 함수를 private에 선언만 하고 정의 안 하기"라는 C++03 시절 기법을 쓰거나, 애초에 CMessageBuffer를 항상 포인터(<code>CMessageBuffer*</code>)로만 다뤄 복사가 문법적으로 발생하지 않게 한다. 효과는 같다(복사 차단). 당신이 재작성할 때는 의도가 명확한 <code>= delete</code>를 쓰는 게 정석이다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://www.learncpp.com/cpp-tutorial/introduction-to-the-copy-constructor/">learncpp — Copy constructor</a>부터 copy assignment, shallow vs deep copy 챕터까지 연속으로. 규칙: <a href="https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Rc-five">Core Guidelines C.21 (Rule of Five/Three)</a>.</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0016-vector-internals.html">레슨 16</a> · <a href="0018-operator-overloading.html">레슨 18: 연산자 오버로딩</a> → · <a href="../reference/full-curriculum.html">전체 지도</a><br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0017-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: '소멸자에서 delete[]를 하는 클래스가 복사 함수를 안 만들면 생기는 일은?',
+  options: ['자동 얕은 복사가 이중 해제를 일으킨다', '컴파일러가 복사를 자동으로 막아준다', '복사 시 깊은 복사가 기본으로 수행된다'],
+  answer: 0,
+  explain: '자동 복사는 포인터 값만 베낀다(얕음). 두 객체가 같은 버퍼를 가리키다 각자 소멸하며 두 번 delete → 힙 파괴. 그래서 Rule of Three는 "소멸자를 썼으면 복사도 정의하라"고 한다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'CMessageBuffer가 깊은 복사가 아니라 복사 금지 + 참조 카운트를 택한 이유는?',
+  options: ['하나의 패킷을 여러 세션이 함께 써야 해서', '깊은 복사는 C++14에서 지원되지 않아서', '참조 카운트가 복사보다 항상 더 빠르기 때문에'],
+  answer: 0,
+  explain: '브로드캐스트는 같은 버퍼를 여럿이 공유하는 것이지 복제가 아니다. 깊은 복사면 30명에게 30벌을 만드는 낭비. 공유 + 마지막이 반납(DecRef 0)이 정답이다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: '참조 카운트 객체를 얕은 복사(카운트 안 올리고 포인터만 베낌)하면?',
+  options: ['실제 사용자보다 카운트가 적어 조기 반납·재사용 오염', '카운트가 두 배로 뛰어 영원히 반납되지 않는 누수', '아무 문제 없다 — DecRef가 알아서 맞춰준다'],
+  answer: 0,
+  explain: '두 명이 드는데 카운트는 하나. 첫 DecRef에서 0이 되어 풀에 반납되고, 둘째 사용자는 이미 재사용 중인 버퍼를 밟는다. 그래서 복사를 막고 공유는 AddRef로만 한다.'
+});
+</script>

@@ -1,0 +1,94 @@
+<title>레슨 4-1 — const의 위치가 바꾸는 것</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0004-1 · 파생 심화 · <a href="0004-references-and-passing.html">레슨 4</a>에서 파생 (질문: "const 위치에 따라 의미가 달라지는 문법은 알 필요가 없나?")</div>
+<h1>const의 위치가 바꾸는 것</h1>
+<p class="lede">알아야 한다 — 그것도 필수다. NetLib 시그니처의 절반이 <code>const WCHAR*</code>다. 이 문법을 못 읽으면 "누가 무엇을 못 바꾸는지"라는 <strong>계약</strong>을 못 읽는다. 규칙은 딱 하나다.</p>
+
+<div class="box insight">
+<div class="box-title">단 하나의 규칙</div>
+포인터 선언에서 <code>*</code>를 찾아라. <strong>const가 <code>*</code>의 <em>왼쪽</em>에 있으면 → 가리키는 <em>대상</em>이 const</strong>(<code>*p</code>를 못 바꿈). <strong>const가 <code>*</code>의 <em>오른쪽</em>에 있으면 → <em>포인터 자신</em>이 const</strong>(<code>p</code>를 다른 곳으로 못 옮김).
+</div>
+
+<h2>세 가지 경우 — 같은 부품, 다른 계약</h2>
+<pre><code>const WCHAR* p;    // ① *의 왼쪽 const → 대상이 const
+WCHAR* const p;    // ② *의 오른쪽 const → 포인터가 const
+const WCHAR* const p; // ③ 양쪽 → 둘 다 const</code></pre>
+
+<table>
+<tr><th></th><th>바꿀 수 있나: <code>p[0] = 'x'</code><br>(대상 수정)</th><th>바꿀 수 있나: <code>p = other</code><br>(포인터 재지정)</th></tr>
+<tr><td>① <code>const WCHAR* p</code></td><td><strong>❌ 불가</strong> (대상 const)</td><td>✅ 가능</td></tr>
+<tr><td>② <code>WCHAR* const p</code></td><td>✅ 가능</td><td><strong>❌ 불가</strong> (포인터 const)</td></tr>
+<tr><td>③ <code>const WCHAR* const p</code></td><td>❌ 불가</td><td>❌ 불가</td></tr>
+</table>
+
+<p class="note"><code>const WCHAR*</code>와 <code>WCHAR const*</code>는 <strong>완전히 같다</strong>. 컴파일러는 const를 바로 왼쪽 것에 붙이는데, 맨 앞에 오면 예외적으로 오른쪽(WCHAR)에 붙인다. 그래서 둘 다 "대상이 const". 헷갈리면 <em>머릿속에서 <code>const</code>를 <code>*</code> 바로 왼쪽으로 옮겨 읽어라</em> — 의미가 안 변한다.</p>
+
+<h2>왜 NetLib은 ①(<code>const WCHAR*</code>)만 쓰는가</h2>
+<pre><code>bool CServer::Start(const WCHAR* cwIP, ...);   // CServer.cpp:11
+virtual bool OnConnectionRequest(const WCHAR* cwIP, ...) = 0;  // CServer.h:44</code></pre>
+<p><code>const WCHAR* cwIP</code>는 호출자에게 주는 <strong>서면 약속</strong>이다: "네 문자열의 <em>주소만</em> 받아서(8바이트, 복사 안 함) <strong>읽기만 하고 절대 안 고친다</strong>." 두 가지 이득:</p>
+<ul>
+<li><strong>안전</strong>: 함수가 실수로 호출자의 문자열을 훼손하는 걸 컴파일러가 막는다. 계약 위반 시 <em>빌드가 멈춘다</em> — 런타임 버그가 아니라.</li>
+<li><strong>유연</strong>: 문자열 리터럴 <code>L"127.0.0.1"</code>은 그 자체가 읽기 전용이다. 파라미터가 <code>const</code>여야 리터럴을 넘길 수 있다. <code>WCHAR*</code>(non-const)였다면 리터럴 전달이 거부된다.</li>
+</ul>
+<p>포인터 자신(<code>cwIP</code>)이 const일 필요는 없다 — 함수 안에서 <code>cwIP++</code>로 훑든 말든 호출자와 무관하니까. 그래서 ②·③이 아니라 ①이다. <strong>계약은 "대상 불변"이면 충분하다.</strong></p>
+
+<h2>리턴에서의 const — <code>GetSector</code>의 두 겹</h2>
+<pre><code>const std::vector&lt;CCharacter*&gt;&amp; GetSector(int iX, int iY)  // CSector.h:24</code></pre>
+<p>여기 const가 두 가지를 동시에 말한다:</p>
+<ul>
+<li><code>&amp;</code>(참조 리턴): 벡터를 <strong>복사하지 않는다</strong>. 섹터에 100명이 있어도 800바이트 복사가 아니라 내부 벡터를 그대로 <em>빌려준다</em>.</li>
+<li><code>const</code>: 빌려준 그 벡터에 <strong>원소를 추가·삭제 못 한다</strong>. 호출자가 서버 내부 상태를 건드리는 걸 막는 울타리.</li>
+</ul>
+<div class="box">
+<div class="box-title">함정 — const는 한 겹만 막는다</div>
+<code>const vector&lt;CCharacter*&gt;&amp;</code>에서 const가 지키는 건 <strong>벡터</strong>다. 그 안의 <code>CCharacter*</code>가 가리키는 <em>캐릭터</em>는 여전히 수정 가능하다 — <code>GetSector(...)[0]->SetHP(...)</code>는 컴파일된다. const는 "벡터에 손대지 마"이지 "캐릭터에 손대지 마"가 아니다. (레슨 4의 <code>for (CCharacter* pOther : GetSector(...))</code> 순회가 이래서 성립한다.)
+</div>
+
+<h2>곁가지 — 앞으로 만날 두 형태 (지금은 눈만)</h2>
+<ul>
+<li><strong>값 파라미터의 const</strong>: <code>void f(const int x)</code> — 어차피 복사본이라 호출자에겐 무의미. 그래서 시그니처엔 거의 안 쓴다. const가 <em>의미를 갖는 건 포인터·참조 파라미터</em>일 때다 (레슨 4의 주제와 정확히 연결).</li>
+<li><strong>멤버 함수 뒤 const</strong>: <code>int GetSize() const</code> — "이 메서드는 <em>객체 자신</em>을 안 바꾼다"는 약속. 이 저장소엔 아직 없지만 표준 라이브러리 도처에 있다. 레슨 16(vector 내부)에서 다시 만난다.</li>
+</ul>
+
+<h2>드릴 — 각 시그니처가 "무엇을 못 하게" 막는가 (답은 접기)</h2>
+<pre><code>void a(const BYTE* p);      // CSysLog: 무엇이 불변?
+void b(IN_ADDR* pAddr);     // CServer::DomainToIP의 두 번째 인자: 왜 const가 없나?
+CCharacter* const c = &players[0];  // c에 무엇을 못 하나?</code></pre>
+<details class="faq"><summary>답 확인 (먼저 스스로 답할 것)</summary><div class="faq-a">
+<p><strong>a</strong>: <code>*</code> 왼쪽 const → <strong>가리키는 바이트들이 불변</strong>. 함수는 버퍼를 읽어 로그로 찍기만 하고 원본을 안 고친다. (포인터 p는 함수 안에서 옮겨도 됨.)<br>
+<strong>b</strong>: <code>DomainToIP(const WCHAR* cwIP, IN_ADDR* pAddr)</code>에서 <code>pAddr</code>는 <strong>일부러 non-const</strong> — 이 함수의 목적이 결과(찾은 IP)를 <em>그 주소에 써주는 것</em>이기 때문. const였다면 결과를 못 쓴다. <em>const의 유무가 곧 "입력이냐 출력이냐"를 말한다.</em><br>
+<strong>c</strong>: <code>*</code> 오른쪽 const → <strong>포인터 c를 다른 데로 못 옮긴다</strong>(<code>c = &players[1]</code> 불가). 하지만 <code>c->SetHP(0)</code>은 가능 — 대상은 const가 아니니까.</p>
+</div></details>
+
+<h2>확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+
+<h2>주 자료 (필독)</h2>
+<ul>
+<li><a href="https://www.learncpp.com/cpp-tutorial/pointers-and-const/">learncpp — Pointers and const</a> — ①②③를 그림으로 다시 본다. 가장 신뢰도 높은 입문 자료.</li>
+<li>레퍼런스: <a href="https://en.cppreference.com/w/cpp/language/pointer">cppreference — Pointer declaration</a> (정확한 문법 규칙).</li>
+</ul>
+
+<div class="lesson-footer">
+부모 레슨: <a href="0004-references-and-passing.html">레슨 4 — 값, 포인터, 참조</a> · <a href="index.html">코스 홈</a><br>
+막히면 에이전트에게. "이 함수는 왜 const가 없지?"가 좋은 다음 질문이다 — 대개 "출력 파라미터라서"다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: 'Start(const WCHAR* cwIP)에서 const가 막는 것은 정확히 무엇인가?',
+  options: ['함수가 cwIP가 가리키는 문자열을 수정하는 것', '함수가 cwIP 포인터를 다른 곳으로 옮기는 것', '호출자가 서로 다른 문자열을 넘기는 것'],
+  answer: 0,
+  explain: 'const가 *의 왼쪽에 있으니 "대상(문자열)이 불변"이다. 포인터 cwIP 자신은 함수 안에서 자유롭게 옮길 수 있고, 호출자는 어떤 문자열이든 넘길 수 있다. 막히는 건 오직 "함수가 그 문자열을 고치는 것"뿐.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'const vector<CCharacter*>& 를 리턴받았다. 컴파일되지 않는 것은?',
+  options: ['리턴받은 벡터에 push_back으로 원소 추가', '리턴받은 벡터의 원소로 캐릭터의 HP 수정', '리턴받은 벡터를 for 루프로 순회해 읽기'],
+  answer: 0,
+  explain: 'const는 "벡터"를 잠근다 → 원소 추가·삭제 불가(push_back 거부). 하지만 원소인 CCharacter*가 가리키는 캐릭터는 const가 아니라 HP 수정은 됨. 읽기 순회는 당연히 가능. const는 한 겹만 막는다.'
+});
+</script>

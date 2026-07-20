@@ -1,0 +1,104 @@
+<title>참조: 전체 커리큘럼 지도 (깊이 우선 완전판)</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Reference · 전체 지도</div>
+<h1>전체 커리큘럼 지도 — 깊이 우선 완전판</h1>
+<p class="lede">수준 조정 없이 "이 서버를 손코딩으로 재작성 + 관련 지식 전부"를 바닥까지 파는 기준의 지도. ✅ = 레슨 존재(제목이 링크). 예상 총량: <strong>레슨 60~70개 + 재구현 프로젝트</strong>. 현재 진도(2026-07-12): <strong>작성</strong> 레슨 22개 + 파생 3개 / 약 65 — 문서 기준 ≈34%. <strong>통과</strong>(퀴즈·실습 검증) <strong>A1~A5 = 5개</strong> + 파생 3개 → <strong>배치 1(C++ 기본기) 완주.</strong> 다음: 기둥 B(CS 기초) 진입.</p>
+
+<h2>기둥 A — C++ 언어 (11/13)</h2>
+<table>
+<tr><td>✅ 1</td><td><a href="../lessons/0001-object-in-memory.html">객체를 바이트로 보기 (레이아웃·정렬·패딩)</a> · 파생 <a href="../lessons/0001-1-padding-rules-and-pointer-size.html">1-1</a></td></tr>
+<tr><td>✅ 2</td><td><a href="../lessons/0002-pointers.html">포인터</a></td></tr>
+<tr><td>✅ 3</td><td><a href="../lessons/0003-stack-heap-lifetime.html">스택·힙·수명·RAII 입문</a></td></tr>
+<tr><td>✅ 4</td><td><a href="../lessons/0004-references-and-passing.html">값·포인터·참조·const 전달</a></td></tr>
+<tr><td>✅ 5</td><td><a href="../lessons/0005-inheritance-virtual.html">상속과 virtual (vtable)</a></td></tr>
+<tr><td>✅ A6</td><td><a href="../lessons/0016-vector-internals.html">배열·문자열·std::vector 내부 (size/capacity, 재할당, iterator 무효화 — CSector의 vector를 완전 해부)</a></td></tr>
+<tr><td>✅ A7</td><td><a href="../lessons/0017-copy-and-rule-of-three.html">생성자 심화: 복사·대입·Rule of Three (CMessageBuffer는 왜 복사를 막아야 하나)</a></td></tr>
+<tr><td>✅ A8</td><td><a href="../lessons/0018-operator-overloading.html">연산자 오버로딩 (CMessageBuffer의 &lt;&lt;/&gt;&gt;를 직접 설계)</a></td></tr>
+<tr><td>✅ A9</td><td><a href="../lessons/0019-templates.html">템플릿 기초 (CMemoryPool&lt;T&gt;, CLockFreeStack&lt;T&gt;가 읽히는 수준까지)</a></td></tr>
+<tr><td>✅ A10</td><td><a href="../lessons/0020-static.html">static의 4가지 얼굴 (CMessageBuffer::pool, static 스레드 함수 + this 전달 관례)</a></td></tr>
+<tr><td>✅ A11</td><td><a href="../lessons/0021-casting.html">캐스팅 4형제와 (SOCKADDR*) 캐스팅의 정체</a></td></tr>
+<tr><td>✅ A12</td><td><a href="../lessons/0022-compile-and-link.html">컴파일·링크 모델 (헤더/#pragma once/정적 라이브러리 — NetLib.lib가 만들어지는 과정)</a></td></tr>
+<tr><td>A13</td><td>이동 시맨틱과 스마트 포인터 (모던 C++로 이 코드를 다시 쓴다면)</td></tr>
+</table>
+
+<h2>기둥 B — CS 기초 (5/11)</h2>
+<table>
+<tr><td>✅ 6</td><td><a href="../lessons/0006-virtual-memory.html">가상 메모리</a></td></tr>
+<tr><td>✅ 7</td><td><a href="../lessons/0007-cpu-cache.html">CPU 캐시와 지역성</a></td></tr>
+<tr><td>✅ 8</td><td><a href="../lessons/0008-bits-and-bytes.html">비트와 바이트</a></td></tr>
+<tr><td>✅ 9</td><td><a href="../lessons/0009-serialization.html">직렬화</a></td></tr>
+<tr><td>✅ 10</td><td><a href="../lessons/0010-ring-buffer.html">링버퍼</a></td></tr>
+<tr><td>B6</td><td>프로세스와 스레드, 스케줄러 (타임슬라이스, 우선순위, Sleep(0)/Sleep(1)의 실제 의미)</td></tr>
+<tr><td>B7</td><td>자료구조 선택학: 배열·해시·트리 (세션 lookup이 O(1)인 이유, std::map을 안 쓴 이유)</td></tr>
+<tr><td>B8</td><td>Big-O 실전 (PeekBulk가 O(N²)→O(N)으로 바뀐 실제 커밋 해부)</td></tr>
+<tr><td>B9</td><td>시간과 타이머 (timeGetTime/QueryPerformanceCounter, 타이머 해상도 15.6ms와 timeBeginPeriod(1))</td></tr>
+<tr><td>B10</td><td>정수 오버플로와 wrap-around (DWORD 시간 비교 now - last가 오버플로에도 안전한 이유)</td></tr>
+<tr><td>B11</td><td>문자 인코딩 (WCHAR/UNICODE/UTF-8 — 이 프로젝트가 유니코드 빌드를 강제하는 이유)</td></tr>
+</table>
+
+<h2>기둥 C — 네트워크 (5/9)</h2>
+<table>
+<tr><td>✅ 11</td><td><a href="../lessons/0011-tcp-ip-big-picture.html">TCP/IP 큰 그림</a></td></tr>
+<tr><td>✅ 12</td><td><a href="../lessons/0012-socket-api.html">소켓 API·에코 서버</a></td></tr>
+<tr><td>✅ 13</td><td><a href="../lessons/0013-framing.html">프레이밍·재조립</a></td></tr>
+<tr><td>✅ 14</td><td><a href="../lessons/0014-blocking-limits.html">블로킹의 한계와 I/O 모델</a></td></tr>
+<tr><td>✅ 15</td><td><a href="../lessons/0015-connection-lifecycle.html">연결의 죽음</a></td></tr>
+<tr><td>C6</td><td>TCP 내부 1: 재전송·수신 윈도우·흐름 제어 (느린 클라이언트가 서버를 미는 메커니즘)</td></tr>
+<tr><td>C7</td><td>TCP 내부 2: Nagle·지연 ACK·TCP_NODELAY (게임서버가 반드시 만지는 소켓 옵션들)</td></tr>
+<tr><td>C8</td><td>패킷 설계학: 대역폭 예산 (이동 패킷 × 9500명 × 주변 인원 = 팬아웃 산수, SYNC 패킷의 존재 이유)</td></tr>
+<tr><td>C9</td><td>UDP와 신뢰성 계층 (TCP를 선택한 결정을 반대편에서 검증)</td></tr>
+</table>
+
+<h2>기둥 D — Windows 시스템 · IOCP (0/9)</h2>
+<table>
+<tr><td>D1</td><td>스레드 생성과 커널 객체 (_beginthreadex, HANDLE, WaitForSingleObject — Stop()의 종료 시퀀스)</td></tr>
+<tr><td>D2</td><td>동기화 커널 객체 개관 (이벤트·뮤텍스·세마포어 — 이 서버가 하나도 안 쓰는 이유까지)</td></tr>
+<tr><td>D3</td><td>Overlapped I/O와 OVERLAPPED 구조체 (OVERLEX 확장 트릭 — type 1/2로 recv/send 구분)</td></tr>
+<tr><td>D4</td><td>IOCP 본체: CreateIoCompletionPort의 두 얼굴, GQCS, CompletionKey 설계</td></tr>
+<tr><td>D5</td><td>WSARecv/WSASend 심화: WSABUF 2세그먼트 스캐터, 부분 완료, WSAEWOULDBLOCK의 세계</td></tr>
+<tr><td>D6</td><td>세션 수명 관리 1: lIOCount 참조 카운트 (IO가 걸린 세션은 죽일 수 없다)</td></tr>
+<tr><td>D7</td><td>스레드 파이프라인 설계: 워커→GameThread→SendThread, 알림 큐, 배칭의 손익계산 (Bench/RESULTS.md 해부)</td></tr>
+<tr><td>D8</td><td>크래시 덤프: SEH, MiniDumpWriteDump, WinDbg로 덤프 읽기 실습</td></tr>
+<tr><td>D9</td><td>프로파일링: QPC 기반 샘플링, ProfileTLS 설계 (TLS는 왜 필요한가)</td></tr>
+</table>
+
+<h2>기둥 E — 멀티스레드 · 락프리 (0/12) — 가장 깊은 우물</h2>
+<table>
+<tr><td>E1</td><td>경쟁 조건의 해부 (count++가 사라지는 순간을 재현하는 실습)</td></tr>
+<tr><td>E2</td><td>Interlocked 계열과 CAS (하드웨어 원자 명령의 정체)</td></tr>
+<tr><td>E3</td><td>메모리 가시성: 컴파일러/CPU 재배열, volatile의 진짜 의미 (ThreadStop이 volatile인 이유)</td></tr>
+<tr><td>E4</td><td>x86 메모리 모델과 acquire/release (Preshing 3부작 정독 레슨)</td></tr>
+<tr><td>E5</td><td>false sharing 측정 실습 (ProfileTLS의 THREAD_SAMPLE 배열 설계 검증)</td></tr>
+<tr><td>E6</td><td>스핀 vs 블로킹, 그리고 이 서버의 선택 (Sleep 기반 틱 + 락프리 큐 조합의 논리)</td></tr>
+<tr><td>E7</td><td>락프리 스택 (Treiber) 구현 → 그리고 부수기 (ABA 재현 실습)</td></tr>
+<tr><td>E8</td><td>ABA 해법: unique 태그와 128비트 CAS (InterlockedCompareExchange128, 16바이트 정렬)</td></tr>
+<tr><td>E9</td><td>락프리 큐 (Michael-Scott) 해부 + PeekBulk 최적화</td></tr>
+<tr><td>E10</td><td>락프리 메모리 풀 (CMemoryPool 완전 해부: 체크코드, 정렬, 태그)</td></tr>
+<tr><td>E11</td><td>세션 수명 관리 2: lSendFlag 3상태 클레임과 릴리즈 단일화 (이 서버 최고 난도 설계)</td></tr>
+<tr><td>E12</td><td>동시성 테스트 방법론 (LockFreeStressTest.cpp 해부, 불변식 기반 검증)</td></tr>
+</table>
+
+<h2>기둥 F — 종합 재구현 (0/9) — 레슨이 아니라 프로젝트</h2>
+<table>
+<tr><td>F1</td><td>CRingBuffer 재작성 + 단위 테스트</td></tr>
+<tr><td>F2</td><td>CMessageBuffer 재작성 (연산자·헤더·경계 검사)</td></tr>
+<tr><td>F3</td><td>블로킹 에코 → IOCP 에코 서버 전환</td></tr>
+<tr><td>F4</td><td>멀티세션: 세션 배열 + Key 체계 + Accept 통합</td></tr>
+<tr><td>F5</td><td>수신 파이프라인: RecvMsgDiv + 완료큐 + GameThread</td></tr>
+<tr><td>F6</td><td>송신 파이프라인: SendQ + 배칭 + lSendFlag</td></tr>
+<tr><td>F7</td><td>세션 수명 완성: lIOCount + 릴리즈 + 좀비 타임아웃</td></tr>
+<tr><td>F8</td><td>락프리 부품 교체 (풀·스택·큐를 자작품으로)</td></tr>
+<tr><td>F9</td><td>FighterServer 게임 로직 + 봇으로 부하 테스트 + 원본과 벤치마크 대결</td></tr>
+</table>
+
+<h2>진행 원칙 (2026-07-06 개정 — 완전판 확정)</h2>
+<ul>
+<li><strong>전 항목 순회.</strong> 사용자가 완전판을 선택했다(학습 기록 0003). 심화 레슨도 건너뛰지 않는다. 예정 배치 순서:
+배치 4 = A6~A10 (C++ 심화) → 배치 5 = A11~A13 + B6~B7 → 배치 6 = B8~B11 + C6 → 배치 7 = C7~C9 + D1~D2 → 배치 8~9 = D3~D9 (IOCP) → 배치 10~12 = E1~E12 (락프리) → F1~F9 (재구현 프로젝트, 배치 단위가 아니라 마일스톤 단위).</li>
+<li><strong>깊이의 담보는 규율.</strong> 배치는 미리 열되, 학습 기록은 실습 통과로만 쌓인다. 1차 소스(learncpp/OSTEP/CS:APP/Preshing) 병독, 간격 재검 필수.</li>
+<li>학습 기록이 쌓이면 항목은 합쳐지거나 쪼개질 수 있다(특히 E4는 분할 가능성 높음). 지도는 계약이 아니라 나침반이다.</li>
+</ul>
+
+<div class="lesson-footer"><a href="../lessons/index.html">코스 홈</a> · <a href="codebase-map.html">코드베이스 지도</a> · 작성 2026-07-06</div>
+</main>

@@ -1,0 +1,135 @@
+<title>레슨 7 — CPU 캐시와 지역성: 섹터가 list를 버린 이유</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0007 · CS 기초 · 컴퓨터 구조</div>
+<h1>CPU 캐시와 지역성: 섹터가 list를 버린 이유</h1>
+<p class="lede">RAM 접근은 CPU에게 <em>수백 사이클</em>짜리 여행이다. 오늘의 목표: 캐시라인 개념으로 이 서버가 섹터 컨테이너를 <code>std::list</code>에서 <code>std::vector</code>로 바꾼 결정을 스스로 정당화하고, 그 차이를 직접 측정한다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+같은 O(N)인데 10배 느린 코드가 있다 — Big-O가 안 알려주는 부분이 캐시다. 이 코드베이스에는 그 증거가 박제되어 있다: <a href="../reference/codebase-map.html">코드베이스 지도</a>의 "섹터 list→vector 마이그레이션", 그리고 CMessageBuffer 주석의 "참조 카운트를 별도 힙에서 멤버로 옮겼다(캐시 지역성)". 손코딩 재작성 때 여러분이 똑같이 내려야 할 종류의 결정이다.
+</div>
+
+<h2>1. 지식 — 계층, 라인, 지역성</h2>
+
+<h3>메모리는 계층이다</h3>
+<table>
+<tr><th>계층</th><th>대략적 지연</th><th>비유 (L1=1초라면)</th></tr>
+<tr><td>L1 캐시 (~32KB)</td><td>~4 사이클</td><td>1초 — 책상 위</td></tr>
+<tr><td>L2 캐시 (~256KB+)</td><td>~12 사이클</td><td>3초 — 책상 서랍</td></tr>
+<tr><td>L3 캐시 (수 MB)</td><td>~40 사이클</td><td>10초 — 책장</td></tr>
+<tr><td>RAM</td><td>~200+ 사이클</td><td>1분 — 도서관 왕복</td></tr>
+</table>
+<p>CPU는 RAM에서 직접 일하지 않는다. 필요한 데이터를 캐시로 가져와서 일한다. <a href="https://csapp.cs.cmu.edu/">CS:APP 6장</a>이 이 표의 원전이다.</p>
+
+<h3>캐시라인: 운반 단위는 64바이트</h3>
+<p>캐시는 데이터를 1바이트씩이 아니라 <strong>64바이트 캐시라인</strong> 단위로 가져온다. <code>players[i].shX</code> 한 필드(2바이트)를 읽는 순간, 그 주변 64바이트 — 사실상 CCharacter 하나(48바이트, 레슨 1)의 대부분 — 가 통째로 L1에 올라온다. 직후 <code>players[i].shY</code>를 읽으면? <strong>공짜다.</strong></p>
+
+<h3>지역성: 캐시가 보상하는 두 가지 행동</h3>
+<ul>
+<li><strong>공간 지역성</strong>: 방금 읽은 곳 <em>근처</em>를 읽는다 → 같은 캐시라인, 공짜. 배열 순회가 빠른 이유.</li>
+<li><strong>시간 지역성</strong>: 방금 읽은 곳을 <em>또</em> 읽는다 → 아직 캐시에 있음, 공짜. 루프 변수가 공짜인 이유.</li>
+</ul>
+<p>여기에 보너스: 메모리를 순서대로 읽으면 하드웨어 <strong>프리페처</strong>가 패턴을 감지하고 다음 라인을 미리 가져다 놓는다. 배열 순회는 사실상 RAM 지연을 숨긴 채 달린다.</p>
+
+<h3>사례 해부: 섹터의 list → vector</h3>
+<p><a href="../FighterServer/CSector.cpp">CSector.cpp</a>의 현재 모습:</p>
+<pre><code>std::vector&lt;CCharacter*&gt;&amp; list = sectors[curshY][curshX];
+CCharacter* pMoved = list.back();          // swap-remove: 마지막을 내 자리로
+list[pCharacter-&gt;iSectorIdx] = pMoved;     // O(1), 그리고 전부 연속 메모리
+list.pop_back();</code></pre>
+<table>
+<tr><th></th><th>std::list (연결 리스트)</th><th>std::vector (동적 배열)</th></tr>
+<tr><td>메모리 배치</td><td>노드가 힙에 뿔뿔이 → 순회마다 캐시 미스 행진</td><td>포인터들이 연속 → 라인 하나에 8개씩</td></tr>
+<tr><td>순회(브로드캐스트마다!)</td><td>노드당 포인터 추적 = 도서관 왕복 N번</td><td>프리페처가 미리 날라줌</td></tr>
+<tr><td>중간 삭제</td><td>O(1) — 그러나 그 노드를 <em>찾는</em> 게 이미 비쌈</td><td>원래 O(N)… <strong>swap-remove로 O(1)</strong></td></tr>
+</table>
+<p>핵심 통찰: list의 유일한 장점(중간 삭제 O(1))을 <strong>순서를 포기하는 대가로</strong>(swap-remove + <code>iSectorIdx</code>로 내 위치 기억) vector에서도 얻어냈다. 섹터 안 캐릭터의 순서는 아무 의미가 없으니 공짜 거래다. 이것이 자료구조 선택의 실전 문법이다: "필요 없는 성질(순서)을 팔아 필요한 성질(지역성)을 산다."</p>
+
+<h2>2. 스킬 — 캐시 미스를 측정하기</h2>
+<p><code>scratch\cache_check.cpp</code> — 같은 덧셈 6400만 번, 순서만 다르다:</p>
+<pre><code>#include &lt;cstdio&gt;
+#include &lt;windows.h&gt;
+
+const int N = 8000;                 // 8000×8000 int = 256MB … 캐시보다 훨씬 크게
+static int g_m[N][N];               // 전역(커밋은 첫 접근 때 — 레슨 6!)
+
+int main() {
+    long long sum = 0; DWORD t;
+
+    t = GetTickCount();
+    for (int r = 0; r &lt; N; r++) for (int c = 0; c &lt; N; c++) sum += g_m[r][c];
+    printf("행 우선(연속 접근):   %lu ms\n", GetTickCount() - t);
+
+    t = GetTickCount();
+    for (int c = 0; c &lt; N; c++) for (int r = 0; r &lt; N; r++) sum += g_m[r][c];
+    printf("열 우선(32KB 점프):  %lu ms\n", GetTickCount() - t);
+
+    return (int)(sum &amp; 1);          // 최적화로 루프가 날아가는 것 방지
+}</code></pre>
+<pre><code>cl /EHsc /O2 /nologo cache_check.cpp &amp;&amp; cache_check.exe</code></pre>
+<p>행 우선은 캐시라인의 16개 int를 다 쓰고 넘어가지만, 열 우선은 라인마다 int 하나만 쓰고 버린다. 몇 배 차이가 나는지 기록해 두라 — <em>같은 연산 횟수, 같은 Big-O</em>다.</p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>캐시는 내가 코드로 제어할 수 있나요?</summary><div class="faq-a">
+<p>직접 명령할 수는 없다(하드웨어가 자동 관리). 우리가 할 수 있는 것은 <strong>캐시가 좋아하는 접근 패턴을 만드는 것</strong>뿐이다: 연속 배치(vector), 순차 순회, 자주 같이 쓰는 데이터를 한 구조체에(CMessageBuffer가 refcount를 멤버로 들인 이유), 안 쓰는 데이터를 핫 루프에서 치우기. "제어 불가, 그러나 유혹 가능"이라 기억하라.</p>
+</div></details>
+
+<details class="faq"><summary>vector의 중간 삭제가 O(N)이라는 게 정확히 왜죠?</summary><div class="faq-a">
+<p>중간 원소를 빼면 <em>순서를 유지하기 위해</em> 뒤의 원소를 전부 한 칸씩 앞으로 복사해야 하기 때문이다. swap-remove는 그 전제를 뒤집는다: 순서 유지를 포기하면 "마지막 원소를 빈자리에 꽂고 크기만 줄이는" 두 번의 대입으로 끝난다. 단, 옮겨진 원소의 위치가 바뀌므로 <code>iSectorIdx</code>처럼 각자 자기 위치를 기억시켜야 한다 — CSector.cpp:25가 정확히 그 갱신이다.</p>
+</div></details>
+
+<details class="faq"><summary>레슨 1의 "멤버 순서만 바꾸면 40바이트" 떡밥이 캐시랑 무슨 상관인가요?</summary><div class="faq-a">
+<p>이제 회수할 수 있다. 48바이트 CCharacter는 64바이트 라인에 1개 + 다음 것이 걸쳐 들어간다. 40바이트로 줄이면 캐릭터가 라인 경계에 걸치는 빈도가 줄고, 배열 전체 순회 시 읽는 라인 수도 준다. 더 나아가 진짜 고수의 수는 <strong>핫 필드 분리</strong>다: 매 프레임 만지는 shX/shY만 별도 배열로 빼면(SoA 구조) 이동 처리 루프의 캐시 효율이 극대화된다. MMO 서버들이 실제로 쓰는 기법이다.</p>
+</div></details>
+
+<details class="faq"><summary>포인터의 배열(vector&lt;CCharacter*&gt;)이면 결국 따라간 곳은 흩어져 있잖아요?</summary><div class="faq-a">
+<p>날카로운 지적이다. 포인터 <em>목록</em>은 연속이지만 역참조 대상은 점프다. 다만 이 서버의 대상은 <code>players</code>라는 <em>하나의 연속 배열</em> 안에 있으므로 완전 무작위 힙 노드보다 훨씬 낫다(같은 페이지·인접 라인에 몰려 있을 확률이 높다). 완벽하진 않지만 list(노드 자체도, 연결도 흩어짐)와는 급이 다르다. "한 단계 간접 참조까지 계산에 넣는" 이 사고방식이 서버 성능 감각의 핵심이다.</p>
+</div></details>
+
+<details class="faq"><summary>멀티스레드에서 캐시는 어떻게 되나요? 코어마다 따로 있잖아요.</summary><div class="faq-a">
+<p>L1/L2는 코어마다 따로 있고, 하드웨어가 코어 간 일관성을 자동으로 맞춘다(캐시 일관성 프로토콜). 문제는 그 비용이다: 두 코어가 <em>같은 캐시라인</em>을 서로 쓰면 라인이 코어 사이를 핑퐁친다 — 서로 다른 변수여도 같은 64바이트에 있으면 당한다(거짓 공유, false sharing). 이 서버의 ProfileTLS가 스레드별 배열을 <em>따로</em> 두는 이유가 정확히 이것이다. 멀티스레드 아크에서 정면으로 다룬다.</p>
+</div></details>
+
+<details class="faq"><summary>실무에서 캐시 미스를 어떻게 확인하죠? 감으로 하나요?</summary><div class="faq-a">
+<p>측정한다. 오늘 실습처럼 시간 비교가 1차 도구이고, 본격적으로는 VTune·perf 같은 프로파일러가 캐시 미스 카운터(하드웨어가 세 준다)를 보여준다. 이 코드베이스의 ProfileTLS도 "어디가 느린가"를 찾는 1차 도구다. 원칙: <strong>추측 금지, 측정 우선</strong> — Bench/RESULTS.md가 그 문화의 증거물이다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://csapp.cs.cmu.edu/">CS:APP 6장 (The Memory Hierarchy)</a> — 도서관에서 빌려서라도 이 장은 읽을 가치가 있다. 무료 대안: <a href="https://pages.cs.wisc.edu/~remzi/OSTEP/">OSTEP</a>의 캐싱 관련 절.</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0006-virtual-memory.html">레슨 6</a> · <a href="0008-bits-and-bytes.html">레슨 8: 비트와 바이트</a> → <br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0007-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: 'players[i].shX를 읽은 직후 players[i].shY 읽기가 사실상 공짜인 이유는?',
+  options: ['같은 64바이트 캐시라인에 이미 올라와 있어서', 'shX와 shY는 레지스터에 같이 저장되기 때문에', '컴파일러가 두 읽기를 하나로 합쳐 버리기 때문'],
+  answer: 0,
+  explain: 'shX(오프셋 14)와 shY(오프셋 16)는 2바이트 거리 — 캐시라인 하나가 64바이트를 통째로 가져오므로 두 번째 접근은 L1 히트다.'
+});
+Quiz(document.getElementById('q2'), {
+  q: '섹터가 순서 유지를 포기하고 얻은 것 두 가지는?',
+  options: ['삭제 O(1)과 순회 시의 캐시 지역성이다', '삽입 O(1)과 메모리 사용량 절반 감소다', '검색 O(1)과 스레드 안전성 확보 두 개다'],
+  answer: 0,
+  explain: 'swap-remove로 중간 삭제가 O(1)이 되고, 연속 배열이므로 브로드캐스트 순회가 캐시 친화적이다. 검색은 여전히 O(N)이고 스레드 안전성과는 무관하다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: '행 우선과 열 우선 순회는 연산 횟수가 같은데 속도가 다르다. Big-O 관점의 교훈은?',
+  options: ['Big-O는 접근 횟수만 세고 접근 비용의 차이는 못 본다', '열 우선은 사실 O(N²)가 아니라 O(N³)이기 때문이다', 'Big-O 분석이 틀린 것이므로 실무에서는 무시해야 한다'],
+  answer: 0,
+  explain: 'Big-O는 "몇 번 접근하나"의 증가율이다. 접근 한 번이 1사이클(캐시 히트)인지 200사이클(미스)인지는 모델 밖이다. 그래서 상수배 차이는 자료구조의 메모리 배치가 결정한다.'
+});
+</script>

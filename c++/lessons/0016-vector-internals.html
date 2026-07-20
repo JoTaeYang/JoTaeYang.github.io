@@ -1,0 +1,152 @@
+<title>레슨 16 — std::vector 내부: capacity, 재할당, 무효화</title>
+<link rel="stylesheet" href="../assets/course.css">
+<main>
+<div class="kicker">Lesson 0016 · C++ 심화 · 표준 라이브러리</div>
+<h1>std::vector 내부: capacity, 재할당, 무효화</h1>
+<p class="lede">vector는 "마법의 늘어나는 배열"이 아니다. 포인터 하나, 크기 둘로 된 아주 단순한 구조체다. 오늘의 목표: 그 세 필드를 직접 그리고, 이 서버의 섹터 코드에 숨은 무효화 함정을 찾아낸다.</p>
+
+<div class="box insight">
+<div class="box-title">왜 이걸 배우나</div>
+<a href="../FighterServer/CSector.cpp">CSector</a>는 33×43개 섹터마다 <code>std::vector&lt;CCharacter*&gt;</code>를 두고, 매 프레임 브로드캐스트로 순회한다(레슨 7의 캐시 이야기). vector가 언제 통째로 이사하는지(재할당), 그때 붙잡고 있던 포인터·인덱스가 어떻게 썩는지(무효화)를 모르면 "가끔 크래시하는" 지옥의 버그를 심게 된다. swap-remove가 왜 그렇게 짜였는지도 여기서 완성된다.
+</div>
+
+<h2>1. 지식 — vector의 정체는 세 필드다</h2>
+
+<h3>포인터 + size + capacity</h3>
+<p>vector는 개념적으로 이것뿐이다:</p>
+<pre><code>template&lt;typename T&gt;
+class vector {
+    T*     _data;      // 힙에 할당된 배열의 시작 (레슨 3: new[])
+    size_t _size;      // 지금 들어있는 원소 수
+    size_t _capacity;  // 재할당 없이 담을 수 있는 최대치
+};</code></pre>
+<p><strong>size ≤ capacity</strong>가 핵심 불변식이다. <code>size()</code>는 "몇 개 있나", <code>capacity()</code>는 "몇 개까지 견디나". 둘은 다르다 — 이 구분을 놓치면 vector를 영원히 오해한다.</p>
+
+<h3>재할당(reallocation): 꽉 차면 통째로 이사한다</h3>
+<p><code>push_back</code>인데 <code>size == capacity</code>라면? vector는:</p>
+<ol>
+<li>더 큰 배열을 힙에 새로 할당한다 (보통 <strong>capacity를 1.5~2배로</strong> — MSVC는 1.5배)</li>
+<li>기존 원소를 전부 새 배열로 복사(또는 이동)한다</li>
+<li>옛 배열을 <code>delete[]</code>한다</li>
+<li><code>_data</code>가 <strong>새 주소</strong>를 가리키게 바꾼다</li>
+</ol>
+<p>2배씩 늘리는 이유(분할 상환): N번 push_back의 총 복사 비용이 O(N)에 수렴한다 — 매번 1개씩 늘리면 O(N²)가 된다. 이것이 "vector의 push_back은 평균 O(1)"의 진짜 의미다. <a href="https://en.cppreference.com/w/cpp/container/vector">cppreference: vector</a></p>
+
+<div class="box warning">
+<div class="box-title">재할당 = 대이동 = 무효화</div>
+3단계에서 옛 배열이 사라진다. 그러면 재할당 <em>전에</em> 얻어둔 모든 것이 썩는다: 원소를 가리키던 <strong>포인터·참조·iterator 전부가 댕글링</strong>(레슨 3)이 된다. 이것이 vector의 제1함정, "iterator 무효화"다.
+</div>
+
+<h3>이 서버는 이 함정을 어떻게 피했나 — 두 겹의 방어</h3>
+<p><strong>방어 1: 원소가 포인터다.</strong> <a href="../FighterServer/CSector.cpp">CSector</a>의 vector는 <code>CCharacter</code>가 아니라 <code>CCharacter*</code>를 담는다(레슨 2·7). 재할당이 일어나도 <em>이사하는 건 8바이트 주소들</em>이고, 캐릭터 실물은 <code>players</code> 배열에 그대로 있다. 즉 "섹터 vector가 재할당돼도 캐릭터 객체 자체의 주소는 안 변한다." players 배열로 캐릭터를 가리키는 다른 코드들이 안전한 이유다.</p>
+<p><strong>방어 2: iterator 대신 인덱스를 저장한다.</strong> 그런데 문제가 하나 더 있다. 재할당되면 <em>vector 안에서의 위치</em>를 가리키던 iterator는 썩는다. 그래서 <code>CCharacter</code>는 자기 위치를 iterator가 아니라 <strong>정수 인덱스</strong> <code>iSectorIdx</code>로 기억한다:</p>
+<pre><code>// SectorAddCharacter — 넣을 때 내 인덱스를 스스로 기록
+pCharacter-&gt;iSectorIdx = (int)sectors[shY][shX].size();   // 새 원소는 맨 끝
+sectors[shY][shX].push_back(pCharacter);</code></pre>
+<p>인덱스 3은 재할당 후에도 "새 배열의 3번째"로 유효하다 — 주소가 아니라 <em>순번</em>이니까. iterator 무효화를 인덱스로 우회한 것이다.</p>
+
+<h3>swap-remove 재방문 — 이제 완전히 읽힌다</h3>
+<pre><code>void CSector::SectorRemoveCharacter(CCharacter* pCharacter) {
+    std::vector&lt;CCharacter*&gt;&amp; list = sectors[curshY][curshX];
+    CCharacter* pMoved = list.back();          // 마지막 원소
+    list[pCharacter-&gt;iSectorIdx] = pMoved;      // 내 자리에 마지막을 덮어씀
+    pMoved-&gt;iSectorIdx = pCharacter-&gt;iSectorIdx; // 옮겨간 놈에게 새 인덱스 통보!
+    list.pop_back();                            // 크기 1 감소 (capacity는 그대로)
+}</code></pre>
+<p>레슨 7에서는 "순서를 포기해 O(1) 삭제를 샀다"고 했다. 이제 세 번째 줄의 진짜 의미가 보인다: <strong>마지막 원소를 옮겼으면 그 원소의 <code>iSectorIdx</code>도 갱신해야 한다.</strong> 안 하면 pMoved는 자기가 아직 맨 끝에 있다고 착각하고, 다음 삭제 때 엉뚱한 자리를 건드린다. 인덱스로 위치를 관리하는 설계의 대가이자 규율이다. 그리고 <code>pop_back</code>은 size만 줄이고 capacity는 안 건드린다 — 그래서 반복 입퇴장에도 재할당이 거의 안 일어난다(캐시 친화, 레슨 7).</p>
+
+<h2>2. 스킬 — 재할당과 무효화를 눈으로 목격하기</h2>
+<p><code>scratch\vector_check.cpp</code> — 각 push_back의 capacity 변화를 예측하고 실행하라:</p>
+<pre><code>#include &lt;cstdio&gt;
+#include &lt;vector&gt;
+
+int main() {
+    std::vector&lt;int&gt; v;
+    printf("초기: size=%zu cap=%zu\n", v.size(), v.capacity());
+
+    int prevCap = -1;
+    for (int i = 0; i &lt; 10; i++) {
+        v.push_back(i);
+        if ((int)v.capacity() != prevCap) {           // capacity가 바뀐 순간 = 재할당
+            printf("push %2d → size=%2zu cap=%2zu  ← 재할당!\n", i, v.size(), v.capacity());
+            prevCap = (int)v.capacity();
+        }
+    }
+
+    // 무효화 실험 — 이게 핵심이다:
+    std::vector&lt;int&gt; w;
+    w.push_back(100);
+    int* p = &amp;w[0];                    // 0번 원소의 주소를 붙잡는다
+    printf("\n재할당 전: p=%p, *p=%d\n", (void*)p, *p);
+    for (int i = 0; i &lt; 50; i++) w.push_back(i);   // 강제로 여러 번 재할당
+    printf("재할당 후: p=%p, w[0]=%d\n", (void*)p, w[0]);
+    printf("같은 주소인가: %d  (다르면 p는 이제 댕글링!)\n", p == &amp;w[0]);
+    // *p 를 읽으면? → 해제된 메모리 접근. 주석 풀고 관찰(값이 깨지거나 크래시)
+    // printf("*p = %d\n", *p);
+}</code></pre>
+<pre><code>cl /EHsc /nologo vector_check.cpp &amp;&amp; vector_check.exe</code></pre>
+<p>확인: ① capacity가 0→1→2→3→4... 가 아니라 계단식(1→2→3→4→6→9...MSVC 1.5배)으로 뛰는가. ② 재할당 후 <code>p == &amp;w[0]</code>이 거짓인가 — 붙잡아둔 포인터가 썩은 증거다. <strong>이 순간이 "왜 CSector가 포인터+인덱스를 쓰는지"의 실물 증명이다.</strong></p>
+
+<h2>3. 확인 퀴즈</h2>
+<div data-quiz id="q1"></div>
+<div data-quiz id="q2"></div>
+<div data-quiz id="q3"></div>
+
+<h2>4. 초보자 질문 세트</h2>
+<p>클릭하기 전에 먼저 스스로 답해 보라.</p>
+
+<details class="faq"><summary>size와 capacity가 다르면, 남는 capacity 자리에는 뭐가 들어있나요?</summary><div class="faq-a">
+<p>아무것도 아니다 — 할당은 됐지만 아직 <em>생성되지 않은</em> 원시 메모리다(레슨 6의 커밋된 페이지지만 쓰레기값). <code>v[size()]</code>처럼 그 자리를 인덱스로 접근하면 UB다. vector가 <code>size</code>를 따로 들고 있는 이유가 이것 — "어디까지가 진짜 원소인가"의 경계다. 레슨 9의 CMessageBuffer가 BufferSize(공간)와 WritePos(데이터 끝)를 구분한 것과 똑같은 구조다.</p>
+</div></details>
+
+<details class="faq"><summary>reserve()는 뭔가요? 언제 쓰죠?</summary><div class="faq-a">
+<p>capacity를 미리 키워두는 함수다. 최종 크기를 안다면 <code>v.reserve(9500)</code>로 재할당을 한 번에 끝내 — 중간의 여러 번 대이동과 무효화를 전부 없앤다. 서버 초기화처럼 "곧 N개가 들어올 것"이 확실할 때 성능+안전 둘 다 얻는다. 이 서버가 세션 배열을 아예 new[]로 고정 할당한 것(레슨 3)도 같은 정신의 극단판이다.</p>
+</div></details>
+
+<details class="faq"><summary>pop_back으로 지워도 capacity가 안 줄면 메모리 낭비 아닌가요?</summary><div class="faq-a">
+<p>맞지만 의도된 트레이드오프다. 섹터는 캐릭터가 끊임없이 드나드는 곳이라, 줄일 때마다 배열을 다시 잡으면 곧바로 또 늘려야 해서 재할당이 폭증한다(진동). capacity를 유지하면 "한 번 커진 섹터는 그 크기를 재사용"하므로 안정적이다. 정말 줄이고 싶으면 <code>shrink_to_fit()</code>이 있지만, 게임서버 핫패스에서는 거의 안 쓴다 — 메모리 몇 KB보다 재할당 없는 예측 가능성이 값지다.</p>
+</div></details>
+
+<details class="faq"><summary>list[iSectorIdx] = pMoved 처럼 []로 쓰는 건 재할당을 안 일으키나요?</summary><div class="faq-a">
+<p>안 일으킨다. <code>[]</code>는 <em>이미 있는</em> 원소를 덮어쓸 뿐 size를 늘리지 않는다 — 재할당은 오직 size가 capacity를 넘으려 할 때(push_back, insert 등)만 발생한다. 그래서 swap-remove의 덮어쓰기+pop_back 조합은 재할당·무효화를 전혀 유발하지 않는 안전한 O(1) 연산이다. 설계자가 이걸 알고 짠 것이다.</p>
+</div></details>
+
+<details class="faq"><summary>[] 접근은 범위 검사를 하나요? at()과 뭐가 다르죠?</summary><div class="faq-a">
+<p><code>[]</code>는 검사 안 한다(C 배열처럼 빠르되 범위 밖이면 UB). <code>at()</code>은 검사하고 범위를 벗어나면 예외를 던진다. 게임서버 핫패스는 성능과 "인덱스는 내가 통제한다"는 확신 때문에 거의 <code>[]</code>를 쓴다 — CSector도 그렇다. 대신 그 확신이 틀리면(iSectorIdx 갱신을 빠뜨리면) 조용한 오염이 된다. 속도의 대가는 규율이다.</p>
+</div></details>
+
+<details class="faq"><summary>vector 대신 처음부터 고정 배열을 쓰면 재할당 걱정이 없지 않나요?</summary><div class="faq-a">
+<p>맞고, 그게 세션 배열의 선택이다(최대치가 고정이므로). 하지만 섹터당 인원은 0명일 수도 수백 명일 수도 있어 최대치로 고정하면(예: 섹터마다 9500칸) 33×43×9500 = 엄청난 낭비다. vector는 "대부분 비어있고 가끔 붐비는" 섹터에 딱 맞는다 — 실제 인원만큼만 메모리를 쓰되 필요하면 늘어난다. <strong>자료구조 선택은 데이터의 분포를 아는 데서 나온다</strong>는 걸 보여주는 좋은 대비다.</p>
+</div></details>
+
+<h2>다음 단계</h2>
+<ul>
+<li><strong>주 자료(필독)</strong>: <a href="https://www.learncpp.com/cpp-tutorial/introduction-to-stdvector-and-list-constructors/">learncpp — std::vector</a> 및 capacity 관련 후속 챕터. 레퍼런스: <a href="https://en.cppreference.com/w/cpp/container/vector">cppreference vector</a>의 "Iterator invalidation" 표는 외워둘 가치가 있다.</li>
+</ul>
+
+<div class="lesson-footer">
+<a href="index.html">코스 홈</a> · ← <a href="0015-connection-lifecycle.html">레슨 15</a> · <a href="0017-copy-and-rule-of-three.html">레슨 17: 복사와 Rule of Three</a> → · <a href="../reference/full-curriculum.html">전체 지도</a><br>
+궁금한 것은 무엇이든 에이전트에게 — 좋은 질문은 파생 문서(0016-1…)가 된다.
+</div>
+</main>
+<script src="../assets/quiz.js"></script>
+<script>
+Quiz(document.getElementById('q1'), {
+  q: 'push_back 도중 size가 capacity를 넘으려 할 때 vector가 하는 일은?',
+  options: ['더 큰 배열로 전체를 복사·이동하고 옛 것을 버린다', '남은 빈 자리에 그냥 원소를 이어서 넣는다', '원소를 힙에 개별 할당하고 포인터만 잇는다'],
+  answer: 0,
+  explain: '재할당이다. 새 배열(보통 1.5~2배) 할당 → 복사 → 옛 배열 delete → _data가 새 주소로. 이 대이동이 iterator·포인터 무효화를 일으킨다. 세 번째는 vector가 아니라 list의 방식.'
+});
+Quiz(document.getElementById('q2'), {
+  q: 'CSector가 위치를 iterator가 아니라 정수 iSectorIdx로 저장하는 이유는?',
+  options: ['재할당돼도 순번(인덱스)은 유효하기 때문이다', '정수가 iterator보다 메모리를 덜 쓰기 때문에', 'iterator는 포인터 타입에는 쓸 수 없기 때문이다'],
+  answer: 0,
+  explain: '재할당은 주소를 바꾸므로 iterator(위치의 주소)는 썩지만, "3번째"라는 순번은 새 배열에서도 유효하다. 무효화를 인덱스로 우회한 설계다.'
+});
+Quiz(document.getElementById('q3'), {
+  q: 'swap-remove에서 pMoved->iSectorIdx를 갱신하지 않으면?',
+  options: ['옮겨진 원소가 옛 위치를 기억해 다음 삭제 때 오작동', '즉시 컴파일 에러가 나서 빌드가 실패한다', '아무 문제 없다 — pop_back이 알아서 맞춰준다'],
+  answer: 0,
+  explain: '마지막에서 앞으로 옮겨진 원소는 새 인덱스를 통보받아야 한다. 안 하면 자기가 아직 맨 끝인 줄 알고, 다음 SectorRemove 때 엉뚱한 자리를 덮어써 조용한 오염이 된다.'
+});
+</script>
