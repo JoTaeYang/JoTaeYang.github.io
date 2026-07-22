@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>레슨 4 — 안대 쓰고 언덕 내려가기: 경사하강법</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  /* 이 레슨 전용 소품: 밥그릇(cost) 그래프 위를 굴러 내려가는 공 */
+  .bowl { display:block; margin:1.4rem auto; max-width:380px; }
+  .bowl text { font-family: system-ui, sans-serif; font-size:11px; fill: var(--muted); }
+  .bowl .ball { fill:#1a1a1a; }
+  .bowl .start { fill:var(--accent); }
+  .knob { display:flex; gap:1rem; flex-wrap:wrap; margin:1.2rem 0; }
+  .knob > div { flex:1 1 220px; border:1px solid var(--rule); border-radius:8px; padding:0.8rem 1rem; background:#fff; }
+  .knob h3 { margin:0 0 0.3rem; font-size:1rem; }
+  .knob .en { color:var(--muted); font-family:system-ui,sans-serif; font-size:0.72rem; letter-spacing:0.03em; }
+</style>
+</head>
+<body>
+
+<p class="kicker">레슨 4 · Phase 1 — 선형 회귀</p>
+<h1>안대 쓰고 언덕 내려가기:<br>경사하강법</h1>
+<p class="subtitle">지난 레슨에서 "학습 = cost를 가장 작게 만들기"라고 했죠. 그런데 <em>어떻게</em>? 오늘 그 "마법 버튼"의 정체를 봅니다. 여전히 수식은 말과 그림으로 먼저 감싸드릴게요.</p>
+
+<div class="callout key">
+  <span class="label">이 레슨을 마치면 할 수 있는 것</span>
+  누가 "모델이 스스로 답을 찾아간다는 게 뭐예요?"라고 물으면 이렇게 답할 수 있습니다 —
+  <strong>"안대 쓰고 언덕에서 가장 가파른 내리막으로 한 발짝씩 내려가는 거예요. 바닥이 cost가 가장 낮은 지점이고요."</strong>
+</div>
+
+<h2>1. 다시, 우리가 풀려던 문제</h2>
+
+<p><a href="0002-hypothesis-and-cost.html">레슨 2</a>에서 학습을 한 문장으로 정리했어요:
+<a href="../reference/glossary.html#linreg">cost(W, b)</a>를 <strong>가장 작게</strong> 만드는 W와 b를 찾아라.<sup class="cite">1</sup>
+설명을 쉽게 하려고, 오늘은 잠깐 <code>b</code>를 빼고 <strong>기울기 W 하나만</strong> 움직여 봅시다 (가설을 <code>H(x) = Wx</code>로 단순화).</p>
+
+<p>그러면 질문은 딱 하나로 줄어요: <strong>cost를 가장 낮게 만드는 W는 몇일까?</strong></p>
+
+<h2>2. cost 함수는 "밥그릇" 모양이다</h2>
+
+<p>레슨 2의 데이터 <strong>(1,1) (2,2) (3,3)</strong>를 그대로 씁니다. W를 이리저리 바꿔 가며 cost를 재보면요:<sup class="cite">1</sup></p>
+
+<div class="calc">
+  <table>
+    <tr><td>W = 0 → 예측이 전부 0, 많이 빗나감</td><td>cost ≈ 4.67</td></tr>
+    <tr><td>W = 1 → 예측이 정답과 딱 일치</td><td>cost = 0.00</td></tr>
+    <tr><td>W = 2 → 예측이 두 배로 튐, 많이 빗나감</td><td>cost ≈ 4.67</td></tr>
+  </table>
+</div>
+
+<p>W가 1에서 멀어질수록(양쪽 어디로든) cost가 쭉쭉 커집니다. 이 점들을 이으면 <strong>밥그릇(bowl)처럼 U자로 파인 곡선</strong>이 나와요.
+가로축은 W, 세로축은 cost입니다.</p>
+
+<svg class="bowl" viewBox="0 0 340 210" role="img" aria-label="cost 함수가 U자 밥그릇 모양이고, 오른쪽 위에서 시작한 공이 한 발짝씩 바닥으로 내려가는 그림">
+  <!-- 축 -->
+  <line x1="40" y1="180" x2="320" y2="180" stroke="#ccc"/>
+  <line x1="40" y1="180" x2="40" y2="20" stroke="#ccc"/>
+  <text x="322" y="184">W</text>
+  <text x="10" y="24">cost</text>
+  <!-- 밥그릇 곡선 (W 0~2, 최저점 W=1) -->
+  <polyline fill="none" stroke="#9a3412" stroke-width="2"
+    points="40,40 72,101 105,145 137,171 170,180 202,171 235,145 267,101 300,40"/>
+  <!-- 바닥(최저점) 눈금 -->
+  <line x1="170" y1="180" x2="170" y2="185" stroke="#999"/>
+  <text x="163" y="198">W=1</text>
+  <!-- 내려가는 공: 시작(오른쪽 위) → 바닥 -->
+  <circle class="start" cx="300" cy="40" r="6"/>
+  <text x="270" y="34" fill="#9a3412">시작</text>
+  <circle class="ball" cx="235" cy="145" r="4.5"/>
+  <circle class="ball" cx="202" cy="171" r="4.5"/>
+  <circle class="ball" cx="178" cy="179" r="4.5"/>
+  <circle class="ball" cx="170" cy="180" r="5.5"/>
+  <text x="150" y="172" fill="#166534">최저점</text>
+  <!-- 화살표 힌트 -->
+  <path d="M292,52 L246,138" stroke="#bbb" stroke-width="1" stroke-dasharray="3 3"/>
+</svg>
+<p class="small" style="text-align:center">발걸음이 바닥에 가까워질수록 <strong>저절로 작아지는</strong> 게 보이시나요? 왜 그런지는 4번에서.</p>
+
+<h2>3. 경사하강법 = 안대 쓰고 언덕 내려가기</h2>
+
+<p>이제 이 밥그릇의 가장 낮은 곳을 <em>기계적으로</em> 찾아야 합니다. 눈으로는 "저기네" 하지만, 컴퓨터는 곡선 전체를 보지 못해요.
+그래서 쓰는 게 <a href="../reference/glossary.html#gradient-descent">경사하강법(Gradient Descent)</a>입니다. 이름은 거창해도 원리는 이게 전부예요:<sup class="cite">1</sup></p>
+
+<div class="callout">
+  <span class="label">한라산에서 길을 잃었다면</span>
+  해는 지는데 안대까지 썼어요. 발밑밖에 못 느낍니다. 어떻게 내려올까요?
+  <strong>제자리에서 발끝으로 사방을 더듬어, 가장 가파르게 <em>내리막</em>인 쪽으로 한 발짝.</strong>
+  그다음 또 더듬어 한 발짝. 계속 반복하면 언젠가 바닥에 닿습니다. 그게 경사하강법이에요.<sup class="cite">1</sup>
+</div>
+
+<p>모델도 똑같이 합니다. <code>W</code>를 아무 값에서나 시작해(예: W=5) → 지금 서 있는 곳의 <strong>경사(기울기)</strong>를 재고 →
+경사가 낮아지는 쪽으로 <code>W</code>를 한 발짝 옮기고 → 다시 경사를 재고… 이걸 반복하면 밥그릇 바닥, 즉 <strong>cost가 가장 낮은 W</strong>에 도착합니다.</p>
+
+<h2>4. 손잡이는 딱 두 개: 방향과 보폭</h2>
+
+<p>한 발짝을 옮길 때 결정할 건 두 가지뿐이에요. 이 둘만 알면 경사하강법의 90%를 이해한 겁니다.</p>
+
+<div class="knob">
+  <div>
+    <h3>① 기울기 <span class="en">gradient</span></h3>
+    <p style="margin:0">= <strong>어느 쪽으로</strong> 갈까. 지금 지점의 경사를 재서, <em>내리막 방향</em>을 알려줍니다.
+    오른쪽 비탈에 서 있으면 "왼쪽으로", 왼쪽 비탈이면 "오른쪽으로". 그래서 항상 바닥을 향해요.</p>
+  </div>
+  <div>
+    <h3>② 학습률 <span class="en">learning rate · α</span></h3>
+    <p style="margin:0">= <strong>얼마나 크게</strong> 갈까. 한 발짝의 <em>보폭</em>입니다(보통 0.01처럼 작은 값).
+    너무 크면 바닥을 지나쳐 반대 벽으로 튕기고, 너무 작으면 굼벵이처럼 느려요.</p>
+  </div>
+</div>
+
+<p>"기울기를 잰다"는 게 바로 <a href="../reference/glossary.html#gradient-descent">미분(derivative)</a>이에요. 겁먹지 마세요 —
+<strong>미분은 그저 "이 지점에서 곡선이 얼마나 기울었나"를 재는 자</strong>일 뿐이고, 손으로 계산할 일은 없습니다.
+컴퓨터(TensorFlow)가 대신 해줘요.<sup class="cite">1</sup></p>
+
+<h2>5. 마법 버튼을 수식 한 줄로 (딱 한 번만)</h2>
+
+<p>위 두 손잡이를 한 줄로 적으면 이렇게 됩니다. 기호가 무섭지만, 방금 배운 말 그대로예요:</p>
+
+<div class="eq">
+  새 <span class="hl">W</span> ← 지금 <span class="hl">W</span> − <span class="hl">α</span> × (기울기)
+</div>
+
+<ul>
+  <li><strong>− (빼기)</strong> = 내리막 쪽으로 움직이겠다는 뜻. (그래서 "하강"입니다.)</li>
+  <li><strong>α × 기울기</strong> = 보폭(α) 만큼, 경사(기울기)를 반영해 한 발짝.</li>
+</ul>
+
+<p>기울기가 <strong>가파르면</strong> 발짝이 크고, 바닥에 가까워 <strong>평평해지면</strong> 발짝이 저절로 작아집니다 —
+2번 그림에서 공이 바닥 근처에서 촘촘해진 이유가 이거예요. 알아서 브레이크가 걸리는 셈이죠.</p>
+
+<div class="callout key">
+  <span class="label">레슨 3과 연결 — "다음에 설명"의 정체</span>
+  <a href="0003-tensorflow-linear-regression-code.html">레슨 3</a>의 코드에 <code>learning_rate = 0.01</code> 과
+  <code>GradientDescentOptimizer(...).minimize(cost)</code> 가 있었죠. 그때 "다음에 설명"이라 미뤘던 게 <strong>바로 오늘 이 한 줄</strong>입니다.
+  그 코드가 W를 조금씩 바꾸며 밥그릇 바닥으로 굴려 내리고 있었던 거예요.
+</div>
+
+<h2>6. 왜 "항상" 바닥에 도착할까 (실무 주의점 하나)</h2>
+
+<p>여기 실무에서 진짜 중요한 포인트가 하나 있어요. 만약 cost 곡선이 밥그릇이 아니라 <strong>울퉁불퉁한 산맥</strong>이라면?
+시작 위치에 따라 엉뚱한 <em>웅덩이</em>(가짜 바닥)에 갇혀버립니다. 어디서 시작하느냐가 결과를 바꿔버리죠.<sup class="cite">1</sup></p>
+
+<p>다행히 선형 회귀의 cost는 언제나 <a href="../reference/glossary.html#gradient-descent">볼록 함수(Convex Function)</a> —
+웅덩이가 하나뿐인 <strong>매끈한 밥그릇</strong>이라, <strong>어디서 시작하든 같은 바닥에 도착</strong>합니다. 그래서 안심하고 굴려도 돼요.</p>
+
+<div class="callout">
+  <span class="label">실무 감각으로 챙길 것</span>
+  새로운 문제에 경사하강법을 쓰기 전, "이 cost가 밥그릇(볼록) 모양인가?"를 확인하는 습관.
+  밥그릇이면 경사하강법이 <strong>답을 찾는다고 보장</strong>됩니다.
+</div>
+
+<h2>7. 직접 해보기 (즉시 채점)</h2>
+
+<div class="quiz" data-answer="0">
+  <div class="q">Q1. 경사하강법에서 <strong>기울기(gradient)</strong>가 하는 일은?</div>
+  <button class="opt">내려갈 방향을 정한다</button>
+  <button class="opt">한 번 보폭을 정한다</button>
+  <button class="opt">시작 위치를 정한다</button>
+  <div class="feedback"
+    data-correct="맞아요. 기울기는 '어느 쪽이 내리막인지' 방향을 알려줍니다."
+    data-wrong="아쉬워요. 보폭은 학습률의 몫. 기울기는 '내리막 방향'을 정합니다."></div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <div class="q">Q2. <strong>학습률(learning rate)</strong>이 너무 크면 생기는 일은?</div>
+  <button class="opt">최저점에 빨리 안착한다</button>
+  <button class="opt">최저점 모양이 바뀐다</button>
+  <button class="opt">최저점을 지나쳐 튕긴다</button>
+  <div class="feedback"
+    data-correct="정확합니다. 보폭이 너무 크면 바닥을 건너뛰고 반대편으로 튕겨요."
+    data-wrong="다시 볼까요. 보폭이 너무 크면 바닥을 지나쳐 튕겨 나갑니다."></div>
+</div>
+
+<div class="quiz" data-answer="1">
+  <div class="q">Q3. 어디서 시작해도 <strong>같은 바닥</strong>에 도착하는 이유는?</div>
+  <button class="opt">학습률이 아주 작아서</button>
+  <button class="opt">cost가 밥그릇 모양이라서</button>
+  <button class="opt">데이터가 직선이라서</button>
+  <div class="feedback"
+    data-correct="맞습니다. 볼록(밥그릇) 함수는 웅덩이가 하나뿐이라 시작점과 무관해요."
+    data-wrong="아쉬워요. 핵심은 cost가 볼록(밥그릇) 모양이라 웅덩이가 하나뿐이라는 것."></div>
+</div>
+
+<h2>8. 원본으로 확인하기 (1차 출처)</h2>
+<p>오늘 내용은 김성훈 교수님 <strong>lec 03</strong>을 압축한 것입니다. 교수님이 밥그릇 그래프 위에서 직접 경사를 타고 내려가는 걸
+한 번 보면, "한 발짝씩 굴러 내려간다"는 그림이 확실히 박힙니다.</p>
+<p>▶ <a href="https://www.youtube.com/watch?v=TxIVr-nk1so" target="_blank" rel="noopener">
+lec 03 — Linear Regression의 cost 최소화 알고리즘의 원리 설명 (YouTube, 한국어)</a></p>
+
+<div class="ask">
+  <strong>💬 막히면 저(선생님)에게 물어보세요.</strong> "미분이 아직도 무서워요", "α를 어떻게 정해요?",
+  "웅덩이에 갇힌다는 게 무슨 말이에요?", "제 업무 문제로 예를 들어주세요" — 무엇이든요. 다른 그림으로 다시 설명해 드릴게요.
+</div>
+
+<hr>
+<p class="refs">
+<strong>출처</strong><br>
+<span class="mono">1.</span> 김성훈, 「ML lec 03 — Linear Regression의 cost 최소화 알고리즘의 원리 설명」, 모두를 위한 머신러닝/딥러닝.
+<a href="https://www.youtube.com/watch?v=TxIVr-nk1so">youtube.com/watch?v=TxIVr-nk1so</a>
+</p>
+
+<div class="lesson-nav">
+  <span><a href="0003-tensorflow-linear-regression-code.html">← 레슨 3</a></span>
+  <span><a href="../index.html">🏠 허브</a> · <a href="../reference/glossary.html">📖 용어집</a></span>
+  <span>다음: 레슨 5 — cost 최소화 코드로 보기 (준비 중)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -49,6 +49,11 @@ pre { background: var(--code-bg); padding: 1rem 1.2rem; border-radius: 8px; over
 .key { background: #fffbeb; border-left-color: #b45309; }
 .key .label { color: #b45309; }
 
+/* Equation display — word-first math, no MathJax. Shared across concept lessons. */
+.eq { font-family:"SF Mono",Menlo,monospace; font-size:1.05rem; background:var(--code-bg);
+      border:1px solid var(--rule); border-radius:8px; padding:0.7rem 1rem; text-align:center; margin:1.2rem 0; }
+.eq .hl { color: var(--accent); font-weight:700; }
+
 /* Worked calculation */
 .calc { background: #f8fafc; border: 1px solid var(--rule); border-radius: 8px; padding: 1rem 1.3rem; margin: 1.4rem 0; font-size: 0.95rem; }
 .calc table { width: 100%; border-collapse: collapse; }
@@ -72,6 +77,13 @@ sup.cite { font-size: 0.7rem; }
 .quiz .feedback { margin-top: 0.7rem; font-size: 0.9rem; min-height: 1.2rem; }
 .quiz .feedback.correct { color: var(--good); }
 .quiz .feedback.wrong { color: var(--bad); }
+
+/* Lab lessons — terminal output box + code-step labels (shared across labs) */
+.out { background:#0f1115; color:#d7dae0; border-radius:8px; padding:0.9rem 1.1rem; font-family:"SF Mono",Menlo,monospace;
+       font-size:0.8rem; line-height:1.5; overflow-x:auto; margin:1rem 0; }
+.out .c { color:#7ee787; } .out .dim { color:#8b949e; }
+.step-label { font-family:system-ui,sans-serif; font-size:0.72rem; font-weight:700; letter-spacing:0.06em;
+              text-transform:uppercase; color:var(--accent); margin:2rem 0 0.3rem; }
 
 /* Footer nav */
 .lesson-nav { display: flex; justify-content: space-between; margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--rule); font-family: system-ui, sans-serif; font-size: 0.85rem; }

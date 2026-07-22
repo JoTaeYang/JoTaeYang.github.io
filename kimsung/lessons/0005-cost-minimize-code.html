@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>레슨 5 — 마법 버튼을 뜯어보기: cost 최소화 코드</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  /* 이 레슨 전용 소품: 새 Python 문법 미니표 (L3의 pyprimer 축소판) */
+  .pyprimer { width:100%; border-collapse:collapse; font-size:0.9rem; margin:1rem 0; }
+  .pyprimer td { padding:0.4rem 0.6rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  .pyprimer td:first-child { font-family:"SF Mono",Menlo,monospace; font-size:0.82rem; white-space:nowrap; color:var(--accent); }
+</style>
+</head>
+<body>
+
+<p class="kicker">레슨 5 · Phase 1 — 선형 회귀 (lab)</p>
+<h1>마법 버튼을 손으로 뜯어보기:<br><span style="font-size:1.3rem;color:var(--muted);font-weight:400">— cost 최소화가 실제 코드가 되는 순간</span></h1>
+<p class="subtitle"><a href="0004-gradient-descent.html">레슨 4</a>에서 배운 <strong>수식 한 줄</strong>이, 오늘 진짜 TensorFlow 코드가 됩니다. 역시 <strong>한 줄도 실행할 필요 없어요</strong> — 읽고, 출력까지 여기서 확인만.</p>
+
+<div class="callout key">
+  <span class="label">이 레슨을 마치면 할 수 있는 것</span>
+  경사하강법 수식 <code>새 W ← 지금 W − α×(기울기)</code>가 <strong>코드 3줄</strong>(기울기 → 새 W → 대입)로 바뀌는 걸 짚고,
+  그 3줄을 <strong>optimizer 한 줄</strong>이 통째로 대신한다는 걸 설명할 수 있습니다.
+</div>
+
+<h2>1. 오늘의 목표 — 그 수식을 코드로</h2>
+
+<p>레슨 4에서 "cost 밥그릇 바닥으로 굴러 내려가는" 규칙을 이 한 줄로 적었죠:<sup class="cite">1</sup></p>
+
+<div class="eq">새 <span class="hl">W</span> ← 지금 <span class="hl">W</span> − <span class="hl">α</span> × (기울기)</div>
+
+<p>오늘은 이걸 <strong>두 가지 방법</strong>으로 코드에 옮깁니다 — ⓐ 수식을 <em>손으로 그대로</em> 옮기기, ⓑ <em>optimizer 한 줄</em>로 맡기기.
+그 전에, 레슨 4의 "밥그릇"이 정말 밥그릇인지 코드로 한 번 눈으로 확인하고 갈게요. (데이터는 늘 쓰던 <strong>(1,1)(2,2)(3,3)</strong>, 가설은 단순화해서 <code>H(x)=Wx</code>.)</p>
+
+<h3>새로 나오는 Python·TF 조각 (이것만)</h3>
+<table class="pyprimer">
+  <tr><td>list.append(v)</td><td>목록 끝에 값 <code>v</code>를 하나 <strong>추가</strong>.</td></tr>
+  <tr><td>feed_dict={W: 0.5}</td><td>실행할 때 <code>W</code> 자리에 <strong>0.5를 끼워 넣어라</strong>.</td></tr>
+  <tr><td>W.assign(값)</td><td>Variable <code>W</code>에 새 값을 <strong>대입</strong>(=)하는 TF 방식. (그냥 <code>W = 값</code>은 안 됨.)</td></tr>
+</table>
+
+<h2>2. 밥그릇 눈으로 확인하기 (cost 시각화)</h2>
+
+<p><code>W</code>를 <code>placeholder</code>로 두고 −3부터 5까지 <strong>훑으면서</strong> cost를 재고, 그 값을 찍어보는 코드예요.<sup class="cite">1</sup></p>
+
+<pre><code>import tensorflow as tf
+import matplotlib.pyplot as plt
+
+X = [1, 2, 3]
+Y = [1, 2, 3]
+
+W = tf.placeholder(tf.float32)
+hypothesis = X * W                              # 단순화: H(x)=Wx
+cost = tf.reduce_mean(tf.square(hypothesis - Y))
+
+sess = tf.Session()
+sess.run(tf.global_variables_initializer())
+
+W_val, cost_val = [], []
+for i in range(-30, 50):                        # W를 -3.0 ~ 5.0 까지
+    feed_W = i * 0.1
+    curr_cost, curr_W = sess.run([cost, W], feed_dict={W: feed_W})
+    W_val.append(curr_W)                        # 나중에 그래프 그리려고 저장
+    cost_val.append(curr_cost)
+
+plt.plot(W_val, cost_val)                        # 가로 W, 세로 cost
+plt.show()</code></pre>
+
+<p>이 그림을 그리면 — 레슨 4에서 손으로 그렸던 <strong>바로 그 밥그릇</strong>이 나옵니다. 바닥(cost가 가장 낮은 곳)은
+<code>W = 1</code>. 우리가 눈으로 "정답은 1"이라 했던 걸, 코드가 <a href="0004-gradient-descent.html#">밥그릇 그래프</a>로 그대로 보여주는 거예요.</p>
+
+<h2>3. 방법 ⓐ — 수식을 손으로 옮기기</h2>
+
+<p>이제 밥그릇 바닥을 <em>자동으로</em> 찾아 내려갑니다. 레슨 4 수식을 <strong>딱 세 줄</strong>로 옮겨요. 왼쪽 코드와 오른쪽 개념을 나란히 보세요.<sup class="cite">1</sup></p>
+
+<div class="step-label">코드 3줄 = 레슨 4 수식 그대로</div>
+<pre><code>learning_rate = 0.1
+gradient = tf.reduce_mean((W * X - Y) * X)     # ① 지금 지점의 기울기(=미분)를 잰다
+descent  = W - learning_rate * gradient         # ② 새 W = 지금 W − α × 기울기
+update   = W.assign(descent)                    # ③ 그 새 값을 W에 대입</code></pre>
+
+<ul>
+  <li><strong>① gradient</strong> — "지금 W에서 밥그릇이 얼마나 기울었나". 레슨 4의 <em>기울기(방향)</em>가 이 줄이에요. (미분 공식을 코드로 적은 것 — 손으로 풀 필요 없이 그냥 옮겨 적음.)</li>
+  <li><strong>② descent</strong> — <code>W − α × 기울기</code>. 레슨 4 수식과 <strong>글자까지 똑같죠.</strong> α가 <code>learning_rate</code>(보폭).</li>
+  <li><strong>③ update</strong> — 그렇게 구한 새 값을 W에 <code>assign</code>(대입). 이 <code>update</code>를 한 번 실행 = <strong>한 발짝</strong>.</li>
+</ul>
+
+<div class="step-label">실행 — update를 21번 = 21발짝</div>
+<pre><code>W = tf.Variable(tf.random_normal([1]))          # 아무 랜덤 값에서 시작
+X = tf.placeholder(tf.float32)
+Y = tf.placeholder(tf.float32)
+hypothesis = X * W
+cost = tf.reduce_mean(tf.square(hypothesis - Y))
+# ... 위의 gradient / descent / update 3줄 ...
+
+sess.run(tf.global_variables_initializer())
+for step in range(21):
+    sess.run(update, feed_dict={X: [1,2,3], Y: [1,2,3]})   # ← 한 발짝
+    print(step, sess.run(cost, feed_dict={X:[1,2,3], Y:[1,2,3]}), sess.run(W))</code></pre>
+
+<h2>4. 예상 출력 — cost는 0으로, W는 1로</h2>
+<p>(랜덤 시작이라 <em>숫자는 매번 조금 달라도</em>, <strong>1로 수렴하는 방향은 항상 같아요</strong>.)</p>
+
+<div class="out">
+<span class="dim">step&nbsp;&nbsp;&nbsp;cost&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;W</span>
+   0&nbsp;&nbsp;&nbsp;1.68&nbsp;&nbsp;&nbsp;[1.600]&nbsp;&nbsp;<span class="dim"># 랜덤 시작</span>
+   1&nbsp;&nbsp;&nbsp;0.478&nbsp;&nbsp;[1.320]
+   2&nbsp;&nbsp;&nbsp;0.136&nbsp;&nbsp;[1.171]
+   3&nbsp;&nbsp;&nbsp;0.039&nbsp;&nbsp;[1.091]
+   5&nbsp;&nbsp;&nbsp;0.003&nbsp;&nbsp;[1.026]
+  10&nbsp;&nbsp;&nbsp;0.00001&nbsp;[1.002]
+  20&nbsp;&nbsp;&nbsp;<span class="c">0.00000</span>&nbsp;[<span class="c">1.000</span>]
+</div>
+
+<p>발짝을 뗄 때마다 <strong>cost가 쪼그라들고 W가 1에 착 붙습니다.</strong> 레슨 4의 밥그릇 그림에서 공이 바닥으로 굴러가던 그 장면이,
+숫자로 눈앞에 찍히는 거예요. 우리가 <em>손으로</em> 경사하강법을 구현했는데 이렇게 잘 됩니다.</p>
+
+<h2>5. 방법 ⓑ — optimizer 한 줄에게 맡기기</h2>
+
+<p>그런데 ①의 <code>gradient</code> 줄은 <em>미분 공식을 사람이 직접 적은</em> 거예요. 모델이 복잡해지면 이 미분이 끔찍하게 어려워집니다.
+그래서 TensorFlow엔 그걸 통째로 대신해주는 게 있어요 — 방금 그 <strong>세 줄이 이 한 줄</strong>이 됩니다:<sup class="cite">1</sup></p>
+
+<pre><code>optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+train = optimizer.minimize(cost)                # gradient·descent·assign을 전부 자동으로</code></pre>
+
+<div class="callout key">
+  <span class="label">레슨 3에서 이미 본 그 줄</span>
+  <a href="0003-tensorflow-linear-regression-code.html">레슨 3</a>의 "조각 5 — cost 최소화"가 정확히 이 <code>minimize(cost)</code>였죠.
+  그때 "마법 버튼"이라 불렀던 것의 속(방법 ⓐ 3줄)을 오늘 열어본 겁니다. <strong>미분을 손으로 안 해도, 텐서플로가 대신 밥그릇 바닥으로 굴려줘요.</strong>
+</div>
+
+<h2>6. 어디서 시작해도 1로 (볼록 함수 실증)</h2>
+
+<p>레슨 4에서 "밥그릇(볼록)이면 <strong>어디서 시작하든 같은 바닥</strong>"이라 했죠. 정말 그런지, 시작값을 일부러 엉뚱하게 줘봅니다.<sup class="cite">1</sup></p>
+
+<div class="step-label">시작 W = 5.0 (오른쪽 벽 높이)</div>
+<div class="out">
+<span class="dim">step&nbsp;&nbsp;&nbsp;W</span>
+   0&nbsp;&nbsp;&nbsp;5.000
+   1&nbsp;&nbsp;&nbsp;3.133
+   2&nbsp;&nbsp;&nbsp;2.138
+   5&nbsp;&nbsp;&nbsp;1.173
+  20&nbsp;&nbsp;&nbsp;<span class="c">1.000</span>
+</div>
+
+<div class="step-label">시작 W = −3.0 (반대편 벽)</div>
+<div class="out">
+<span class="dim">step&nbsp;&nbsp;&nbsp;W</span>
+   0&nbsp;&nbsp;−3.000
+   1&nbsp;&nbsp;−1.133
+   2&nbsp;&nbsp;−0.138
+   5&nbsp;&nbsp;&nbsp;0.827
+  20&nbsp;&nbsp;&nbsp;<span class="c">1.000</span>
+</div>
+
+<p>한쪽은 <code>5.0</code>에서 내려오고 다른 쪽은 <code>−3.0</code>에서 올라오는데, <strong>둘 다 1.0에 도착</strong>합니다.
+밥그릇 웅덩이가 하나뿐이라 그래요 — 레슨 4의 "볼록이면 시작점 무관"이 코드로 증명된 셈이죠.</p>
+
+<div class="callout">
+  <span class="label">반복 읽을 때 파볼 지점 (지금은 몰라도 됨)</span>
+  lab 03엔 <code>compute_gradients</code> / <code>apply_gradients</code>로 <strong>텐서플로가 준 기울기를 중간에 손대는</strong> 옵션도 나와요.
+  "자동 미분 값이 내가 손으로 푼 값과 같은가?"를 확인하는 대목인데, 지금 단계에선 건너뛰어도 충분합니다.<sup class="cite">1</sup>
+</div>
+
+<h2>7. 직접 해보기 (즉시 채점)</h2>
+
+<div class="quiz" data-answer="1">
+  <div class="q">Q1. 방법 ⓐ의 <code>update = W.assign(descent)</code> 한 줄이 하는 일은?</div>
+  <button class="opt">기울기를 새로 계산한다</button>
+  <button class="opt">새 W 값을 W에 넣는다</button>
+  <button class="opt">학습률을 절반 줄인다</button>
+  <div class="feedback"
+    data-correct="맞아요. descent(새 W)를 W에 대입하는 게 '한 발짝'입니다."
+    data-wrong="아쉬워요. 기울기는 gradient 줄의 몫. assign은 새 값을 W에 넣습니다."></div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <div class="q">Q2. <code>optimizer.minimize(cost)</code> 한 줄이 대신해 주는 것은?</div>
+  <button class="opt">데이터를 새로 불러오기</button>
+  <button class="opt">cost 공식을 바꿔주기</button>
+  <button class="opt">기울기 계산·W 갱신 전부</button>
+  <div class="feedback"
+    data-correct="정확합니다. 방법 ⓐ의 3줄(기울기·새 W·대입)을 통째로 대신해요."
+    data-wrong="다시 볼까요. 이 한 줄이 gradient·descent·assign 3줄을 전부 자동으로 합니다."></div>
+</div>
+
+<div class="quiz" data-answer="0">
+  <div class="q">Q3. W를 5.0과 −3.0에서 시작했는데 둘 다 1.0으로 간 이유는?</div>
+  <button class="opt">cost가 볼록(밥그릇)이라서</button>
+  <button class="opt">학습률이 0.1이라서</button>
+  <button class="opt">데이터가 세 개라서</button>
+  <div class="feedback"
+    data-correct="맞습니다. 웅덩이가 하나뿐인 볼록 함수라 시작점과 무관해요."
+    data-wrong="아쉬워요. 핵심은 cost가 볼록(밥그릇)이라 바닥이 하나뿐이라는 것."></div>
+</div>
+
+<h2>8. 원본으로 확인하기 (1차 출처)</h2>
+<p>오늘 코드는 김성훈 교수님 <strong>lab 03</strong> 그대로입니다. 교수님이 밥그릇 그래프를 코드로 그리고, 손으로 짠 경사하강법과
+optimizer 한 줄이 같은 결과를 내는 걸 보여줍니다 — <em>보는 것만으로</em> "아 이게 그거였네" 하고 이어져요.</p>
+<p>▶ <a href="https://www.youtube.com/watch?v=Y0EF9VqRuEA" target="_blank" rel="noopener">
+lab 03 — Linear Regression의 cost 최소화 TensorFlow 구현 (YouTube, 한국어)</a></p>
+
+<div class="ask">
+  <strong>💬 막히면 저(선생님)에게 물어보세요.</strong> "assign이 왜 필요해요, 그냥 =는 안 돼요?",
+  "gradient 줄이 왜 그 모양이에요?", "learning_rate를 0.1 말고 1로 주면요?" — 무엇이든요. 반복해 읽다 걸리는 지점, 언제든 가져오세요.
+</div>
+
+<hr>
+<p class="refs">
+<strong>출처</strong><br>
+<span class="mono">1.</span> 김성훈, 「ML lab 03 — Linear Regression의 cost 최소화 TensorFlow 구현」, 모두를 위한 머신러닝/딥러닝.
+<a href="https://www.youtube.com/watch?v=Y0EF9VqRuEA">youtube.com/watch?v=Y0EF9VqRuEA</a>
+<br><span class="small">출력 숫자는 개념 설명용 예시입니다(랜덤 초기값이라 실제 실행 시 값은 달라지되 수렴 방향은 동일).</span>
+</p>
+
+<div class="lesson-nav">
+  <span><a href="0004-gradient-descent.html">← 레슨 4</a></span>
+  <span><a href="../index.html">🏠 허브</a> · <a href="../reference/tensorflow-linreg.html">📄 코드 치트시트</a> · <a href="../reference/glossary.html">📖 용어집</a></span>
+  <span>다음: 레슨 6 — 여러 입력(multi-variable) (준비 중)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

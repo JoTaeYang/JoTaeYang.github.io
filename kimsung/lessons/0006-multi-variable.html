@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>레슨 6 — 입력이 여러 개일 때: multi-variable</title>
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  /* 이 레슨 전용 소품: 행렬 곱 시각화 */
+  .mat { display:flex; flex-wrap:wrap; align-items:center; gap:0.6rem; justify-content:center;
+         font-family:"SF Mono",Menlo,monospace; font-size:0.95rem; margin:1.4rem 0; }
+  .mat .box { border:1px solid var(--rule); border-radius:6px; padding:0.5rem 0.8rem; background:#fff; text-align:center; line-height:1.5; }
+  .mat .op { color:var(--muted); font-size:1.1rem; }
+  .mat .res { color:var(--accent); font-weight:700; }
+  .shape { text-align:center; font-family:"SF Mono",Menlo,monospace; font-size:1.15rem; margin:1.2rem 0; letter-spacing:0.02em; }
+  .shape .inner { color:var(--accent); font-weight:700; border-bottom:2px solid var(--accent); }
+  .shape .outer { background:#fffbeb; font-weight:700; padding:0 0.15em; border-radius:3px; }
+  .feat { width:100%; border-collapse:collapse; font-size:0.9rem; margin:1rem 0; text-align:center; }
+  .feat th, .feat td { border:1px solid var(--rule); padding:0.4rem 0.6rem; }
+  .feat th { background:#f8fafc; font-family:system-ui,sans-serif; font-size:0.8rem; }
+  .feat td:last-child { color:var(--accent); font-weight:700; }
+</style>
+</head>
+<body>
+
+<p class="kicker">레슨 6 · Phase 2 — 여러 입력</p>
+<h1>입력이 여러 개일 때:<br>multi-variable</h1>
+<p class="subtitle">지금까진 입력이 딱 하나였죠(공부 시간 → 점수). 현실은 그렇지 않아요. 오늘은 입력을 <strong>여러 개</strong>로 늘리고, 그걸 <strong>행렬 하나</strong>로 깔끔하게 접는 법을 봅니다. 행렬, 겁내지 마세요 — 표 곱하기일 뿐이에요.</p>
+
+<div class="callout key">
+  <span class="label">이 레슨을 마치면 할 수 있는 것</span>
+  "입력이 3개면 가설은 <code>w₁x₁+w₂x₂+w₃x₃+b</code>", 그리고 "그걸 짧게 쓰면 <strong>H(X) = XW</strong>" —
+  이 두 문장을 <strong>퀴즈 점수로 파이널을 예측하는</strong> 실제 상황에 대고 설명할 수 있습니다.
+</div>
+
+<h2>1. 현실엔 입력이 하나가 아니다</h2>
+
+<p><a href="0002-hypothesis-and-cost.html">레슨 2~5</a>에서 우리는 입력이 <strong>하나</strong>인 세상에 있었어요 — "공부 시간 <code>x</code> → 점수 <code>y</code>". 그런데 실무 데이터는 거의 항상 입력이 여럿입니다.<sup class="cite">1</sup></p>
+
+<p>강의의 실제 예시: <strong>퀴즈1·퀴즈2·중간고사 점수로 기말(final) 점수를 예측</strong>하기. 입력이 세 개죠.</p>
+
+<table class="feat">
+  <tr><th>x₁ (퀴즈1)</th><th>x₂ (퀴즈2)</th><th>x₃ (중간)</th><th>y (기말)</th></tr>
+  <tr><td>73</td><td>80</td><td>75</td><td>152</td></tr>
+  <tr><td>93</td><td>88</td><td>93</td><td>185</td></tr>
+  <tr><td>89</td><td>91</td><td>90</td><td>180</td></tr>
+</table>
+
+<p>기말을 안 보고도 세 점수만으로 기말을 맞힐 수 있다면 좋겠죠? 이렇게 <strong>예측에 쓰는 입력 하나하나를 <a href="../reference/glossary.html#supervised-kinds">피처(feature)</a></strong>라고 불러요. 여기선 피처가 3개입니다.</p>
+
+<h2>2. 좋은 소식: 바뀌는 건 가설 하나뿐</h2>
+
+<p>레슨 2~5에서 선형 회귀는 <strong>세 부분</strong>이었죠 — ① 가설 H, ② cost, ③ 경사하강법.
+입력이 여러 개가 돼도 <strong>② cost와 ③ 경사하강법은 그대로</strong>예요. <em>딱 ① 가설만</em> 넓히면 됩니다.<sup class="cite">1</sup></p>
+
+<p>입력이 하나일 땐 <code>H(x) = wx + b</code>였죠. 입력이 셋이면? <strong>피처마다 weight를 하나씩</strong> 붙여서 옆으로 늘려요:</p>
+
+<div class="eq">H(x₁,x₂,x₃) = <span class="hl">w₁</span>x₁ + <span class="hl">w₂</span>x₂ + <span class="hl">w₃</span>x₃ + b</div>
+
+<p>각 <code>w</code>는 "그 피처가 결과에 <strong>얼마나 중요한가</strong>"예요. 학습이 이 <code>w₁,w₂,w₃</code>(과 b)를 데이터에서 찾아냅니다.
+피처가 100개면? 똑같이 <code>w₁x₁ + … + w₁₀₀x₁₀₀ + b</code>로 쭉 늘리면 돼요.</p>
+
+<h2>3. 문제: 100개를 이렇게 쓰면 손이 아프다</h2>
+
+<p>그런데 피처가 100개, 200개가 되면 이 식이 <strong>끔찍하게 길어집니다.</strong> 매번 항을 100개씩 쓸 순 없죠.
+그래서 이걸 <strong>한 덩어리로 접는</strong> 도구가 <a href="../reference/glossary.html#multi">행렬(matrix)</a>이에요.<sup class="cite">1</sup></p>
+
+<div class="callout">
+  <span class="label">행렬은 그냥 "숫자 표"</span>
+  행렬이라고 하면 복잡해 보이지만, <strong>숫자를 네모나게 늘어놓은 표</strong>일 뿐이에요.
+  우리가 쓸 건 딱 하나 — <strong>행렬 곱셈</strong>: "가로 줄과 세로 줄을 짝지어 곱해서 더하기".
+</div>
+
+<h2>4. 행렬 곱으로 가설을 한 줄에</h2>
+
+<p>피처 <code>x₁,x₂,x₃</code>를 <strong>가로로</strong>, weight <code>w₁,w₂,w₃</code>를 <strong>세로로</strong> 세워 곱하면:<sup class="cite">1</sup></p>
+
+<div class="mat">
+  <span class="box">x₁&nbsp;&nbsp;x₂&nbsp;&nbsp;x₃</span>
+  <span class="op">×</span>
+  <span class="box">w₁<br>w₂<br>w₃</span>
+  <span class="op">=</span>
+  <span class="res">x₁w₁ + x₂w₂ + x₃w₃</span>
+</div>
+
+<p>보세요 — 짝지어 곱해 더했더니(<code>x₁·w₁ + x₂·w₂ + x₃·w₃</code>), 2번의 그 긴 가설이 <strong>그대로 다시 나왔어요.</strong>
+이걸 대문자로 <code>X</code>(피처들), <code>W</code>(weight들)라 쓰면, 가설 전체가 <strong>딱 이 한 줄</strong>이 됩니다:</p>
+
+<div class="eq">H(X) = <span class="hl">X</span><span class="hl">W</span></div>
+
+<div class="callout">
+  <span class="label">왜 wx가 아니라 XW 순서예요?</span>
+  이론·강의에선 <code>Wx</code>라 쓰지만, <strong>실제 코드에선 X를 앞에 둔 <code>XW</code></strong>로 씁니다.
+  행렬은 순서로 크기를 맞춰야 곱셈이 되거든요. 곱셈 값은 <code>Wx</code>와 <strong>똑같아요</strong> — 순서만 실무 관례입니다.
+  (대문자 X·W는 "이건 행렬이다"라는 표시.)<sup class="cite">1</sup>
+</div>
+
+<h2>5. 진짜 마법: 데이터가 만 명이어도 한 번에</h2>
+
+<p>행렬의 놀라운 점이 여기 있어요. 학생이 1명이 아니라 <strong>5명</strong>이면(=인스턴스 5개), 피처 표 <code>X</code>를 <strong>아래로 쌓기만</strong> 하면 됩니다.
+그런데 <code>W</code>는 <strong>그대로</strong>예요. 그리고 곱하면 5명의 예측이 <strong>한 번에</strong> 쏟아집니다.<sup class="cite">1</sup></p>
+
+<div class="shape">
+  [<span class="outer">5</span>, <span class="inner">3</span>] × [<span class="inner">3</span>, <span class="outer">1</span>] = [<span class="outer">5</span>, <span class="outer">1</span>]
+</div>
+
+<p>읽는 법 — <code>[행, 열]</code>은 표의 크기(<a href="../reference/glossary.html#multi">shape</a>)예요:</p>
+<ul>
+  <li><strong>X = [5, 3]</strong>: 학생 <strong>5명</strong>(인스턴스) × 피처 <strong>3개</strong>.</li>
+  <li><strong>W = [3, 1]</strong>: 피처 <strong>3개</strong>를 받아 결과 <strong>1개</strong>(기말 점수).</li>
+  <li>가운데 <span class="inner">3</span>·<span class="inner">3</span>이 <strong>맞아야</strong> 곱셈이 되고, 바깥의 <span class="outer">5</span>·<span class="outer">1</span>이 <strong>결과 크기</strong> → <strong>[5, 1]</strong>(5명 각자의 예측).</li>
+</ul>
+
+<p>학생이 만 명이어도 만 번 계산할 필요 없이, <code>X</code>를 <code>[10000, 3]</code>으로 쌓아 한 번 곱하면 끝. <strong>이게 실무에서 행렬을 쓰는 진짜 이유</strong>예요 — 데이터가 많아도 코드는 안 바뀝니다.</p>
+
+<div class="callout key">
+  <span class="label">실무에서 바로 만날 장면 — W 크기 거꾸로 구하기</span>
+  X(피처 수)와 Y(출력 수)는 문제가 정해줘요. 우리가 정할 건 <strong>W의 크기</strong>인데, 규칙은 간단합니다:
+  <strong>W = [피처 수, 출력 수]</strong>. 인스턴스 개수는 신경 안 써요(가변이니까). 코드에서
+  <code>shape=[None, 3]</code>의 <code>None</code>이 바로 "인스턴스는 몇 개든"이라는 뜻입니다(넘파이는 <code>-1</code>).<sup class="cite">1</sup>
+</div>
+
+<h2>6. (미리 보기) 출력이 여러 개여도 똑같다</h2>
+
+<p>출력을 1개가 아니라 2개로 내고 싶으면? <code>W</code>의 뒷자리만 바꾸면 돼요. 이건 나중에 신경망(neural network)에서 다시 만납니다.<sup class="cite">1</sup></p>
+
+<div class="shape">
+  [<span class="outer">n</span>, <span class="inner">3</span>] × [<span class="inner">3</span>, <span class="outer">2</span>] = [<span class="outer">n</span>, <span class="outer">2</span>]
+</div>
+
+<p>피처 3개 → 출력 2개면 <code>W = [3, 2]</code>. 규칙은 5번과 완전히 같아요. 그래서 <strong>행렬 하나로</strong> 입력이 여럿이든, 데이터가 많든, 출력이 여럿이든 전부 처리됩니다.</p>
+
+<h2>7. 직접 해보기 (즉시 채점)</h2>
+
+<div class="quiz" data-answer="1">
+  <div class="q">Q1. 입력(피처)이 3개로 늘면 가설은 어떻게 바뀌나요?</div>
+  <button class="opt">cost를 세 배로 키운다</button>
+  <button class="opt">weight를 셋으로 늘린다</button>
+  <button class="opt">데이터를 셋으로 나눈다</button>
+  <div class="feedback"
+    data-correct="맞아요. 피처마다 weight 하나씩 → w₁x₁+w₂x₂+w₃x₃+b. cost·경사하강법은 그대로."
+    data-wrong="아쉬워요. 피처마다 weight를 하나씩 붙여 가설만 넓힙니다. cost는 그대로예요."></div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <div class="q">Q2. 가설을 행렬 <code>H(X)=XW</code>로 쓰는 가장 큰 실무 이점은?</div>
+  <button class="opt">cost가 더 작아진다</button>
+  <button class="opt">학습이 항상 빨라진다</button>
+  <button class="opt">데이터 여러 개 한 번에</button>
+  <div class="feedback"
+    data-correct="정확합니다. 인스턴스를 쌓아 한 번 곱하면 전부 계산 — 데이터가 많아도 코드가 그대로."
+    data-wrong="다시 볼까요. 핵심은 여러 인스턴스를 반복 없이 한 번의 행렬 곱으로 처리하는 것."></div>
+</div>
+
+<div class="quiz" data-answer="0">
+  <div class="q">Q3. 피처 3개, 출력 1개일 때 weight 행렬 <code>W</code>의 크기는?</div>
+  <button class="opt">[3, 1]</button>
+  <button class="opt">[1, 3]</button>
+  <button class="opt">[5, 3]</button>
+  <div class="feedback"
+    data-correct="맞습니다. W = [피처 수, 출력 수] = [3, 1]. 인스턴스 개수는 신경 안 써요."
+    data-wrong="아쉬워요. 규칙은 W=[피처 수, 출력 수]. 3개 받아 1개 내니 [3, 1]."></div>
+</div>
+
+<h2>8. 원본으로 확인하기 (1차 출처)</h2>
+<p>오늘 내용은 김성훈 교수님 <strong>lec 04</strong>를 압축한 것입니다. 교수님이 행렬 곱을 손으로 짚으며 <code>[5,3]×[3,1]=[5,1]</code>을
+그려주는 걸 한 번 보면, shape 맞추는 감이 확실히 잡혀요.</p>
+<p>▶ <a href="https://www.youtube.com/watch?v=kPxpJY6fRkY" target="_blank" rel="noopener">
+lec 04 — multi-variable linear regression (YouTube, 한국어)</a></p>
+
+<div class="ask">
+  <strong>💬 막히면 저(선생님)에게 물어보세요.</strong> "행렬 곱이 아직 손에 안 잡혀요", "shape 안쪽/바깥쪽이 헷갈려요",
+  "왜 W는 안 쌓고 X만 쌓아요?", "제 업무 데이터(피처 여러 개)로 예를 들어줘요" — 무엇이든요. 표 그림으로 다시 풀어드릴게요.
+</div>
+
+<hr>
+<p class="refs">
+<strong>출처</strong><br>
+<span class="mono">1.</span> 김성훈, 「ML lec 04 — multi-variable linear regression」, 모두를 위한 머신러닝/딥러닝.
+<a href="https://www.youtube.com/watch?v=kPxpJY6fRkY">youtube.com/watch?v=kPxpJY6fRkY</a>
+</p>
+
+<div class="lesson-nav">
+  <span><a href="0005-cost-minimize-code.html">← 레슨 5</a></span>
+  <span><a href="../index.html">🏠 허브</a> · <a href="../reference/glossary.html">📖 용어집</a></span>
+  <span>다음: 레슨 7 — 여러 입력 코드로 (lab 04-1, 준비 중)</span>
+</div>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

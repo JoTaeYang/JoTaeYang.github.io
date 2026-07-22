@@ -129,7 +129,60 @@
 <div class="term">
   <span class="ko">최소화</span> <span class="en">Minimize</span>
   <p class="def">선형 회귀 <strong>학습의 목표</strong>: cost(W, b)를 가장 작게 만드는 W와 b를 찾는 것.
-  그 방법이 경사하강법(다음 레슨).</p>
+  그 방법이 경사하강법.</p>
+</div>
+
+<h2 class="group" id="gradient-descent">경사하강법</h2>
+
+<div class="term">
+  <span class="ko">경사하강법</span> <span class="en">Gradient Descent</span>
+  <p class="def">cost를 최소화하는 W(·b)를 <strong>기계적으로</strong> 찾는 방법. 아무 값에서 시작해,
+  지금 지점의 경사(기울기)를 재고 <strong>내리막으로 한 발짝</strong>씩 옮기길 반복 → 밥그릇 바닥(cost 최소)에 도달.</p>
+  <p class="ex">비유: 안대 쓰고 언덕에서, 가장 가파른 내리막으로 한 발짝씩 내려오기.</p>
+</div>
+
+<div class="term">
+  <span class="ko">기울기 / 미분</span> <span class="en">Gradient · Derivative</span>
+  <p class="def">한 지점에서 <strong>곡선이 얼마나 기울었나</strong>를 재는 자. 경사하강법에서 <strong>내리막 방향</strong>을 정함.
+  손으로 계산할 일 없음 — 컴퓨터가 대신함.</p>
+</div>
+
+<div class="term">
+  <span class="ko">학습률</span> <span class="en">Learning Rate · α</span>
+  <p class="def">한 발짝의 <strong>보폭</strong>. 보통 0.01처럼 작은 값. 너무 크면 바닥을 지나쳐 튕기고, 너무 작으면 느림.</p>
+</div>
+
+<div class="term">
+  <span class="ko">볼록 함수</span> <span class="en">Convex Function</span>
+  <p class="def">웅덩이가 <strong>하나뿐인 매끈한 밥그릇</strong> 모양. cost가 볼록이면 경사하강법이
+  <strong>시작점과 무관하게 항상</strong> 최저점을 찾는다고 보장. 선형 회귀의 cost가 이 모양.</p>
+</div>
+
+<h2 class="group" id="multi">여러 입력 (multi-variable)</h2>
+
+<div class="term">
+  <span class="ko">다변수 선형 회귀</span> <span class="en">Multi-variable Linear Regression</span>
+  <p class="def">입력(피처)이 <strong>여럿</strong>인 선형 회귀. 피처마다 weight를 하나씩 붙임:
+  <code>H = w₁x₁ + w₂x₂ + w₃x₃ + b</code>. cost·경사하강법은 입력 1개일 때와 <strong>그대로</strong>.</p>
+  <p class="ex">예: 퀴즈1·퀴즈2·중간 점수(피처 3개) → 기말 점수 예측.</p>
+</div>
+
+<div class="term">
+  <span class="ko">행렬 · 행렬 곱</span> <span class="en">Matrix · Matrix Multiplication · XW</span>
+  <p class="def">숫자를 네모나게 늘어놓은 <strong>표</strong>. 긴 가설을 한 덩어리로 접는 도구.
+  가설을 <code>H(X) = XW</code>로 씀(구현 관례로 X를 앞에; 값은 Wx와 동일).</p>
+</div>
+
+<div class="term">
+  <span class="ko">인스턴스</span> <span class="en">Instance</span>
+  <p class="def">데이터 <strong>한 줄(한 샘플)</strong>. 학생 5명이면 인스턴스 5개. X를 아래로 쌓으면 여러 인스턴스를
+  <strong>한 번의 행렬 곱</strong>으로 계산.</p>
+</div>
+
+<div class="term">
+  <span class="ko">셰이프 (크기)</span> <span class="en">Shape · [행, 열]</span>
+  <p class="def">행렬의 크기 <code>[행, 열]</code>. 곱셈은 <strong>안쪽 값이 맞아야</strong> 되고 <strong>바깥 값이 결과</strong>:
+  <code>[5,3]×[3,1]=[5,1]</code>. <strong>W = [피처 수, 출력 수]</strong>. 인스턴스 자리는 가변이라 <code>None</code>(TF) 또는 <code>-1</code>(넘파이).</p>
 </div>
 
 <hr>
